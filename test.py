@@ -29,17 +29,17 @@ print(entity_list)
 print(segment_list)
 
 
-# for i, entity in enumerate(entity_list):
-#     if entity:
-#         # print(entity)
-#         triplets = get_triplets(text=segment, entity=entity)
-#         if triplets:
-#             print(triplets)
-#             for triplet in triplets:
-#                 # print(triplet)
-#                 handler.create_triplet(triplet[0], triplet[1], triplet[2])
+for i, entity in enumerate(entity_list):
+    if entity:
+        # print(entity)
+        triplets = get_triplets(text=segment, entity=entity)
+        if triplets:
+            print(triplets)
+            for triplet in triplets:
+                # print(triplet)
+                handler.create_triplet(triplet[0], triplet[1], triplet[2])
 
-# handler.close()
+handler.close()
 
 # read file
 # file_path = "data\IMPLEMENTATION.md"

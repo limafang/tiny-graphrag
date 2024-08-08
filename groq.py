@@ -25,7 +25,7 @@ class Chatbot:
             model=self.model_name,
             messages=self.conversation_history,
             api_base=self.api_base,
-            temperature=0.7,
+            temperature=0,
             stream=False,
         )
         bot_response = response["choices"][0]["message"]["content"]
@@ -39,7 +39,7 @@ class Chatbot:
             model=self.model_name,
             messages=message,
             api_base=self.api_base,
-            temperature=0.7,
+            temperature=0,
             stream=False,
         )
         bot_response = response["choices"][0]["message"]["content"]

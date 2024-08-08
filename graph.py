@@ -92,3 +92,9 @@ class Neo4jHandler:
         except Exception as e:
             print("An error occurred:", e)
             return None
+
+    def query(self, query):
+        with self.driver.session() as session:
+            result = session.run(query)
+            records = list(result)
+        return records
