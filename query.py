@@ -29,26 +29,26 @@ def cosine_similarity(vector1: List[float], vector2: List[float]) -> float:
     return dot_product / magnitude
 
 
-# user_input = "Hello! I do not know how to build a decision tree. Can you help me?"
+user_input = "Hello! I do not know how to build a decision tree. Can you help me?"
 
-# input_emb = get_emb(user_input)
+input_emb = get_emb(user_input)
 
-# query = """
-# MATCH (n)
-# RETURN n.name, n.embedding
-# """
+query = """
+MATCH (n)
+RETURN n.name, n.embedding
+"""
 
-# res = []
+res = []
 
-# nodes = graph.query(query)
+nodes = graph.query(query)
 
-# for node in nodes:
-#     similarity = cosine_similarity(input_emb, node["n.embedding"])
-#     res.append((node["n.name"], similarity))
+for node in nodes:
+    similarity = cosine_similarity(input_emb, node["n.embedding"])
+    res.append((node["n.name"], similarity))
 
-# res_sorted = sorted(res, key=lambda x: x[1], reverse=True)
+res_sorted = sorted(res, key=lambda x: x[1], reverse=True)
 
-# print(res_sorted[0][0])
+print(res_sorted[0][0])
 
 info_query = f"""
 MATCH (p)<-[r]-(q)
