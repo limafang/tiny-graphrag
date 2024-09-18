@@ -1,0 +1,1 @@
+/home/panduyi/edu/neo4j-community-4.4.26/bin/neo4j start
