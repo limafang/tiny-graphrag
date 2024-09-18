@@ -11,7 +11,7 @@ class TinyGraph:
     def __init__(self, uri, user, password):
         self.driver = GraphDatabase.driver(uri, auth=(user, password))
         self.llm = groq()
-        self.embedding = zhipuemb("7c172280522ff372cba10aeb1c67cbd2.6YOBziXCNFnAx1hL")
+        self.embedding = zhipuemb()
         self.loaded_documents = self._get_loaded_documents_from_db()
 
     def close(self):
