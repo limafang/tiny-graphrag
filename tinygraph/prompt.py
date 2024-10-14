@@ -68,12 +68,12 @@ Identify and extract all the relationships between the given concepts from the p
 Identify as many relationships between the concepts as possible.
 The relationship in the triple should accurately reflect the interaction or connection between the two concepts.
 
-### Guidelines:
+## Guidelines:
 1. **Subject:** The first entity from the given entities.
 2. **Predicate:** The action or relationship linking the subject to the object.
 3. **Object:** The second entity from the given entities.
 
-### Example:
+## Example:
 1. Article :
     "Gaussian Processes are used to model the objective function in Bayesian Optimization" 
    Given entities: 
@@ -94,24 +94,24 @@ The relationship in the triple should accurately reflect the interaction or conn
     Output:
     None
 
-### Format:
+## Format:
 For each identified triplet, provide:
 **the entity should just from "Given Entities"**
 <triplet><subject>[Entity]</subject><predicate>[The action or relationship]</predicate><object>[Entity]</object></triplet>
 
-### Given Entities:
+## Given Entities:
 {entity}
 
 ### Article:
 {text}
 
-### Additional Instructions:
+## Additional Instructions:
 - Before giving your response, you should analyze and think about it sentence by sentence.
 - Both the subject and object must be selected from the given entities and cannot change their content.
 - If no relevant triplet involving both entities is found, no triplet should be extracted.
 - If there are similar concepts, please rewrite them into a form that suits our requirements.
 
-### Your response:
+## Your response:
 """
 
 TEST_PROMPT = """
@@ -124,4 +124,10 @@ Please follow the steps below to help students solve the question:
 2. Don't give a complete answer directly, but guide the student to think about the key steps of the question.
 3. After guiding the student to think, let them try to solve the question by themselves. Give appropriate hints and feedback to help them correct their mistakes and further improve their solutions.
 4. Return to TERMINATE after solving the problem
+"""
+
+COMMUNITY_PROMPT = """
+## Goal
+
+## Example
 """

@@ -1,3 +1,4 @@
 # Compiled python modules
 *.pyc
 __pycache__/
+data_info.txt

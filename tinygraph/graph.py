@@ -1,21 +1,22 @@
 from neo4j import GraphDatabase
+import os
+from tqdm import tqdm
 from .utils import get_text_inside_tag
 from .prompt import GET_ENTITY, GET_TRIPLETS
-from .llm import groq
 from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
-from .embedding import zhipuemb
+from collections import defaultdict
+import json
+
 
 class TinyGraph:
 
-    def __init__(self, uri, user, password):
-        self.driver = GraphDatabase.driver(uri, auth=(user, password))
-        self.llm = groq()
-        self.embedding = zhipuemb()
-        self.loaded_documents = self._get_loaded_documents_from_db()
-
-    def close(self):
-        self.driver.close()
+    def __init__(self, driver, llm, emb, cache_path="data_info.txt"):
+        self.driver = driver
+        self.llm = llm
+        self.embedding = emb
+        self.cache_path = cache_path
+        self.loaded_documents = self.get_loaded_documents()
 
     def create_triplet(self, subject, predicate, obj):
         with self.driver.session() as session:
@@ -47,16 +48,8 @@ class TinyGraph:
             records = list(result)
         return records
 
-
+    @staticmethod
     def split_text(file_path, segment_length=300, overlap_length=50):
-        """
-        从文件中读取文字，并按照指定的长度划分文本，同时每个片段之间有指定的重叠区域。
-
-        :param file_path: 要读取的文件的路径。
-        :param segment_length: 每个片段的基准长度（不包括重叠部分），默认为400。
-        :param overlap_length: 相邻片段之间的重叠长度，默认为100。
-        :return: 包含文本片段的列表，每个片段都有指定的重叠区域（除了最后一个片段）。
-        """
         if overlap_length >= segment_length:
             raise ValueError(
                 "Overlap length cannot be greater than or equal to segment length."
@@ -66,25 +59,21 @@ class TinyGraph:
             content = file.read()
 
         text_segments = []
+        start_index = 0
 
-        if len(content) >= segment_length:
-            text_segments.append(content[:segment_length])
-
-        start_index = segment_length - overlap_length
         while start_index + segment_length <= len(content):
             text_segments.append(content[start_index : start_index + segment_length])
             start_index += segment_length - overlap_length
+
         if start_index < len(content):
             text_segments.append(content[start_index:])
 
         return text_segments
 
-
     def get_entity(self, text: str):
         data = self.llm.predict(GET_ENTITY.format(text=text))
         data = get_text_inside_tag(data, "concept")
         return data
-
 
     def get_triplets(self, text: str, entity: list):
         data = self.llm.predict(GET_TRIPLETS.format(text=text, entity=entity))
@@ -99,172 +88,232 @@ class TinyGraph:
             except:
                 continue
         return res
-    
-    
+
     def load_document(self, filepath):
-        # 检查文档是否已经被加载
+
         if filepath in self.loaded_documents:
-            print(f"doc '{filepath}' has been loaded, skip import process.")
+            print(f"Doc '{filepath}' has been loaded, skip import process.")
             return
         text_segments = self.split_text(filepath)
-        for segment in text_segments:
+        print(f"Doc '{filepath}' has been loaded, processing.")
+        for segment in tqdm(text_segments, desc=f"processing '{filepath}'"):
             entities = self.get_entity(segment)
             triplets = self.get_triplets(segment, entities)
             for subject, predicate, obj in triplets:
                 self.create_triplet(subject, predicate, obj)
-        self._add_document_to_db(filepath)
         self.loaded_documents.add(filepath)
         print(f"doc '{filepath}' has been loaded.")
-        
+
         # 检测社区并创建社区节点
-        self.detect_and_create_communities()
+        # self.detect_and_create_communities()
 
     def get_loaded_documents(self):
-        """
-        返回已加载的文档列表。
-        """
-        return self.loaded_documents
+        if not os.path.exists(self.cache_path):
+            with open(self.cache_path, "w", encoding="utf-8") as file:
+                pass
+        with open(self.cache_path, "r", encoding="utf-8") as file:
+            lines = file.readlines()
+        return set(line.strip() for line in lines)
 
-    def _add_document_to_db(self, filepath):
-        """
-        在图数据库中添加文档节点。
-        """
-        with self.driver.session() as session:
-            session.write_transaction(self._create_document_node, filepath)
+    def add_loaded_documents(self, file_path):
+        if file_path in self.loaded_documents:
+            print(
+                f"Document '{file_path}' has already been loaded, skipping addition to cache."
+            )
+            return
+        with open(self.cache_path, "a", encoding="utf-8") as file:
+            file.write(file_path + "\n")
+        self.loaded_documents.add(file_path)
 
-    @staticmethod
-    def _create_document_node(tx, filepath):
-        query = (
-            "MERGE (d:Document {path: $filepath}) "
-            "RETURN d"
-        )
-        tx.run(query, filepath=filepath)
+    # def cosine_similarity(self, vector1: List[float], vector2: List[float]) -> float:
+    #     """
+    #     calculate cosine similarity between two vectors
+    #     """
+    #     dot_product = np.dot(vector1, vector2)
+    #     magnitude = np.linalg.norm(vector1) * np.linalg.norm(vector2)
+    #     if not magnitude:
+    #         return 0
+    #     return dot_product / magnitude
 
-    def _get_loaded_documents_from_db(self):
-        """
-        从图数据库中获取已加载的文档列表。
-        """
-        with self.driver.session() as session:
-            result = session.read_transaction(self._get_document_nodes)
-        return set(result)
+    # def get_embedding(self, text: str) -> List[float]:
+    #     """
+    #     get embedding of a text
+    #     """
+    #     return self.embedding.get_emb(text)
 
-    @staticmethod
-    def _get_document_nodes(tx):
-        query = "MATCH (d:Document) RETURN d.path"
-        result = tx.run(query)
-        return [record["d.path"] for record in result]
-
-    def cosine_similarity(self, vector1: List[float], vector2: List[float]) -> float:
-        """
-        calculate cosine similarity between two vectors
-        """
-        dot_product = np.dot(vector1, vector2)
-        magnitude = np.linalg.norm(vector1) * np.linalg.norm(vector2)
-        if not magnitude:
-            return 0
-        return dot_product / magnitude
-    
-    def get_embedding(self, text: str) -> List[float]:
-        """
-        get embedding of a text
-        """
-        return self.embedding.get_emb(text)
-    
-    def get_similar_nodes(self, input_emb: List[float]) -> List[Tuple[str, float]]:
-        """
-        根据输入的嵌入向量，返回与图数据库中节点的相似度排序列表。
-        """
-        query = """
-        MATCH (n)
-        RETURN n.name, n.embedding
-        """
-        nodes = self.query(query)
-        res = []
-        for node in nodes:
-            similarity = self.cosine_similarity(input_emb, node["n.embedding"])
-            res.append((node["n.name"], similarity))
-        return sorted(res, key=lambda x: x[1], reverse=True)
+    # def get_similar_nodes(self, input_emb: List[float]) -> List[Tuple[str, float]]:
+    #     """
+    #     根据输入的嵌入向量，返回与图数据库中节点的相似度排序列表。
+    #     """
+    #     query = """
+    #     MATCH (n)
+    #     RETURN n.name, n.embedding
+    #     """
+    #     nodes = self.query(query)
+    #     res = []
+    #     for node in nodes:
+    #         similarity = self.cosine_similarity(input_emb, node["n.embedding"])
+    #         res.append((node["n.name"], similarity))
+    #     return sorted(res, key=lambda x: x[1], reverse=True)
 
     def detect_communities(self):
-        """
-        使用 Leiden 算法检测图中的社区。
-        """
         query = """
-        CALL gds.leiden.write({
-            nodeProjection: 'Entity',
-            relationshipProjection: {
+        CALL gds.graph.project(
+            'graph_help',
+            ['Entity'],
+            {
                 Relationship: {
-                    type: 'Relationship',
                     orientation: 'UNDIRECTED'
                 }
-            },
-            writeProperty: 'community',
-            maxIterations: 10,
-            tolerance: 0.0001
+            }
+        )
+        """
+        with self.driver.session() as session:
+            result = session.run(query)
+            print(result)
+
+        query = """
+        CALL gds.leiden.write('graph_help', {
+            writeProperty: 'communityIds',
+            includeIntermediateCommunities: True,
+            maxLevels: 10,
+            tolerance: 0.0001,
+            gamma: 1.0,
+            theta: 0.01
         })
         YIELD communityCount, modularity, modularities
         """
         with self.driver.session() as session:
             result = session.run(query)
             for record in result:
-                print(f"社区数量: {record['communityCount']}, 模块度: {record['modularity']}")
+                print(
+                    f"社区数量: {record['communityCount']}, 模块度: {record['modularity']}"
+                )
+            session.run("CALL gds.graph.drop('graph_help')")
 
-    def get_communities(self):
-        """
-        获取每个节点所属的社区。
-        """
-        query = """
-        MATCH (n:Entity)
-        RETURN n.name AS name, n.community AS community
-        """
-        with self.driver.session() as session:
-            result = session.run(query)
-            communities = {}
-            for record in result:
-                name = record["name"]
-                community = record["community"]
-                if community not in communities:
-                    communities[community] = []
-                communities[community].append(name)
-        return communities
-
-    def detect_and_create_communities(self):
-        """
-        使用 Leiden 算法检测社区，并创建社区节点。
-        """
-        self.detect_communities()
-        communities = self.get_communities()
-        for community, nodes in communities.items():
-            community_size = len(nodes)
-            level = self._determine_community_level(community_size)
-            report = " ".join(nodes)
-            self._create_community_node(community, level, report)
-
-    def _determine_community_level(self, size):
-        """
-        根据社区大小确定社区等级。
-        """
-        if size < 10:
-            return 1
-        elif size < 50:
-            return 2
-        elif size < 100:
-            return 3
-        else:
-            return 4
-
-    def _create_community_node(self, community, level, report):
-        """
-        创建社区节点。
-        """
-        with self.driver.session() as session:
-            session.write_transaction(self._create_and_return_community, community, level, report)
-
-    @staticmethod
-    def _create_and_return_community(tx, community, level, report):
-        query = (
-            "MERGE (c:Community {id: $community}) "
-            "SET c.level = $level, c.report = $report "
-            "RETURN c"
+    def community_schema(self) -> dict[str, dict]:
+        results = defaultdict(
+            lambda: dict(
+                level=None,
+                title=None,
+                edges=set(),
+                nodes=set(),
+                chunk_ids=set(),
+                occurrence=0.0,
+                sub_communities=[],
+            )
         )
-        tx.run(query, community=community, level=level, report=report)
+
+        with self.driver.session() as session:
+            # Fetch community data
+            result = session.run(
+                f"""
+                MATCH (n:Entity)
+                WITH n, n.communityIds AS communityIds, [(n)-[]-(m:Entity) | m.name] AS connected_nodes
+                RETURN n.name AS node_id, 
+                       communityIds AS cluster_key,
+                       connected_nodes
+                """
+            )
+
+            max_num_ids = 0
+            for record in result:
+                for index, c_id in enumerate(record["cluster_key"]):
+                    node_id = str(record["node_id"])
+                    level = index
+                    cluster_key = str(c_id)
+                    connected_nodes = record["connected_nodes"]
+
+                    results[cluster_key]["level"] = level
+                    results[cluster_key]["title"] = f"Cluster {cluster_key}"
+                    results[cluster_key]["nodes"].add(node_id)
+                    results[cluster_key]["edges"].update(
+                        [
+                            tuple(sorted([node_id, str(connected)]))
+                            for connected in connected_nodes
+                            if connected != node_id
+                        ]
+                    )
+            #         chunk_ids = source_id.split(GRAPH_FIELD_SEP)
+            #         results[cluster_key]["chunk_ids"].update(chunk_ids)
+            #         max_num_ids = max(
+            #             max_num_ids, len(results[cluster_key]["chunk_ids"])
+            #         )
+
+            # # Process results
+            # for k, v in results.items():
+            #     v["edges"] = [list(e) for e in v["edges"]]
+            #     v["nodes"] = list(v["nodes"])
+            #     v["chunk_ids"] = list(v["chunk_ids"])
+            #     v["occurrence"] = len(v["chunk_ids"]) / max_num_ids
+
+            # Compute sub-communities (this is a simplified approach)
+            for cluster in results.values():
+                cluster["sub_communities"] = [
+                    sub_key
+                    for sub_key, sub_cluster in results.items()
+                    if sub_cluster["level"] > cluster["level"]
+                    and set(sub_cluster["nodes"]).issubset(set(cluster["nodes"]))
+                ]
+
+        return dict(results)
+
+    # def get_communities(self):
+    #     """
+    #     获取每个节点所属的社区。
+    #     """
+    #     query = """
+    #     MATCH (n:Entity)
+    #     RETURN id(n) AS nodeId,n.community AS community
+    #     """
+    #     with self.driver.session() as session:
+    #         result = session.run(query)
+    #         communities = {}
+    #         for record in result:
+    #             name = record["name"]
+    #             community = record["community"]
+    #             if community not in communities:
+    #                 communities[community] = []
+    #             communities[community].append(name)
+    #     return communities
+
+    # def detect_and_create_communities(self):
+    #     """
+    #     使用 Leiden 算法检测社区，并创建社区节点。
+    #     """
+    #     self.detect_communities()
+    #     communities = self.get_communities()
+    #     for community, nodes in communities.items():
+    #         community_size = len(nodes)
+    #         level = self._determine_community_level(community_size)
+    #         report = " ".join(nodes)
+    #         self._create_community_node(community, level, report)
+
+    # def _determine_community_level(self, size):
+    #     """
+    #     根据社区大小确定社区等级。
+    #     """
+    #     if size < 10:
+    #         return 1
+    #     elif size < 50:
+    #         return 2
+    #     elif size < 100:
+    #         return 3
+    #     else:
+    #         return 4
+
+    # def _create_community_node(self, community, level, report):
+    #     """
+    #     创建社区节点。
+    #     """
+    #     with self.driver.session() as session:
+    #         session.write_transaction(self._create_and_return_community, community, level, report)
+
+    # @staticmethod
+    # def _create_and_return_community(tx, community, level, report):
+    #     query = (
+    #         "MERGE (c:Community {id: $community}) "
+    #         "SET c.level = $level, c.report = $report "
+    #         "RETURN c"
+    #     )
+    #     tx.run(query, community=community, level=level, report=report)
