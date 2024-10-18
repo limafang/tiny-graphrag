@@ -2,7 +2,7 @@ from neo4j import GraphDatabase
 import os
 from tqdm import tqdm
 from .utils import get_text_inside_tag
-from .prompt import GET_ENTITY, GET_TRIPLETS
+from .prompt import GET_ENTITY, GET_TRIPLETS, GEN_COMMUNITY_REPORT
 from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 from collections import defaultdict
@@ -11,12 +11,15 @@ import json
 
 class TinyGraph:
 
-    def __init__(self, driver, llm, emb, cache_path="data_info.txt"):
+    def __init__(self, driver, llm, emb, working_dir="working_dir"):
         self.driver = driver
         self.llm = llm
         self.embedding = emb
-        self.cache_path = cache_path
-        self.loaded_documents = self.get_loaded_documents()
+        self.working_dir = working_dir
+        os.makedirs(self.working_dir, exist_ok=True)
+        self.txt_path = os.path.join(working_dir, "file.txt")
+        self.chunk_path = os.path.join(working_dir, "chunk.json")
+        self.community_path = os.path.join(working_dir, "community.json")
 
     def create_triplet(self, subject, predicate, obj):
         with self.driver.session() as session:
@@ -90,8 +93,7 @@ class TinyGraph:
         return res
 
     def load_document(self, filepath):
-
-        if filepath in self.loaded_documents:
+        if filepath in self.get_loaded_documents():
             print(f"Doc '{filepath}' has been loaded, skip import process.")
             return
         text_segments = self.split_text(filepath)
@@ -101,60 +103,7 @@ class TinyGraph:
             triplets = self.get_triplets(segment, entities)
             for subject, predicate, obj in triplets:
                 self.create_triplet(subject, predicate, obj)
-        self.loaded_documents.add(filepath)
         print(f"doc '{filepath}' has been loaded.")
-
-        # 检测社区并创建社区节点
-        # self.detect_and_create_communities()
-
-    def get_loaded_documents(self):
-        if not os.path.exists(self.cache_path):
-            with open(self.cache_path, "w", encoding="utf-8") as file:
-                pass
-        with open(self.cache_path, "r", encoding="utf-8") as file:
-            lines = file.readlines()
-        return set(line.strip() for line in lines)
-
-    def add_loaded_documents(self, file_path):
-        if file_path in self.loaded_documents:
-            print(
-                f"Document '{file_path}' has already been loaded, skipping addition to cache."
-            )
-            return
-        with open(self.cache_path, "a", encoding="utf-8") as file:
-            file.write(file_path + "\n")
-        self.loaded_documents.add(file_path)
-
-    # def cosine_similarity(self, vector1: List[float], vector2: List[float]) -> float:
-    #     """
-    #     calculate cosine similarity between two vectors
-    #     """
-    #     dot_product = np.dot(vector1, vector2)
-    #     magnitude = np.linalg.norm(vector1) * np.linalg.norm(vector2)
-    #     if not magnitude:
-    #         return 0
-    #     return dot_product / magnitude
-
-    # def get_embedding(self, text: str) -> List[float]:
-    #     """
-    #     get embedding of a text
-    #     """
-    #     return self.embedding.get_emb(text)
-
-    # def get_similar_nodes(self, input_emb: List[float]) -> List[Tuple[str, float]]:
-    #     """
-    #     根据输入的嵌入向量，返回与图数据库中节点的相似度排序列表。
-    #     """
-    #     query = """
-    #     MATCH (n)
-    #     RETURN n.name, n.embedding
-    #     """
-    #     nodes = self.query(query)
-    #     res = []
-    #     for node in nodes:
-    #         similarity = self.cosine_similarity(input_emb, node["n.embedding"])
-    #         res.append((node["n.name"], similarity))
-    #     return sorted(res, key=lambda x: x[1], reverse=True)
 
     def detect_communities(self):
         query = """
@@ -170,7 +119,6 @@ class TinyGraph:
         """
         with self.driver.session() as session:
             result = session.run(query)
-            print(result)
 
         query = """
         CALL gds.leiden.write('graph_help', {
@@ -191,7 +139,28 @@ class TinyGraph:
                 )
             session.run("CALL gds.graph.drop('graph_help')")
 
-    def community_schema(self) -> dict[str, dict]:
+    def get_entity_by_name(self, name):
+        query = """
+        MATCH (n:Entity {name: $name})
+        RETURN n
+        """
+        with self.driver.session() as session:
+            result = session.run(query, name=name)
+            entities = [record["n"] for record in result]
+        return entities[0]
+
+    def get_edges_by_id(self, name):
+        # TODO
+        query = """
+        MATCH (n:Entity {name: $name})-[r]-(m:Entity)
+        RETURN r
+        """
+        with self.driver.session() as session:
+            result = session.run(query, name=name)
+            edges = [record["r"] for record in result]
+        return edges
+
+    def gen_community_schema(self) -> dict[str, dict]:
         results = defaultdict(
             lambda: dict(
                 level=None,
@@ -234,20 +203,10 @@ class TinyGraph:
                             if connected != node_id
                         ]
                     )
-            #         chunk_ids = source_id.split(GRAPH_FIELD_SEP)
-            #         results[cluster_key]["chunk_ids"].update(chunk_ids)
-            #         max_num_ids = max(
-            #             max_num_ids, len(results[cluster_key]["chunk_ids"])
-            #         )
-
-            # # Process results
-            # for k, v in results.items():
-            #     v["edges"] = [list(e) for e in v["edges"]]
-            #     v["nodes"] = list(v["nodes"])
-            #     v["chunk_ids"] = list(v["chunk_ids"])
-            #     v["occurrence"] = len(v["chunk_ids"]) / max_num_ids
-
-            # Compute sub-communities (this is a simplified approach)
+            for k, v in results.items():
+                v["edges"] = [list(e) for e in v["edges"]]
+                v["nodes"] = list(v["nodes"])
+                v["chunk_ids"] = list(v["chunk_ids"])
             for cluster in results.values():
                 cluster["sub_communities"] = [
                     sub_key
@@ -258,62 +217,73 @@ class TinyGraph:
 
         return dict(results)
 
-    # def get_communities(self):
-    #     """
-    #     获取每个节点所属的社区。
-    #     """
-    #     query = """
-    #     MATCH (n:Entity)
-    #     RETURN id(n) AS nodeId,n.community AS community
-    #     """
-    #     with self.driver.session() as session:
-    #         result = session.run(query)
-    #         communities = {}
-    #         for record in result:
-    #             name = record["name"]
-    #             community = record["community"]
-    #             if community not in communities:
-    #                 communities[community] = []
-    #             communities[community].append(name)
-    #     return communities
+    def gen_community_schema(self):
+        community_schema = self.gen_community_schema()
+        with open(self.community_path, "w", encoding="utf-8") as file:
+            json.dump(community_schema, file, indent=4)
 
-    # def detect_and_create_communities(self):
-    #     """
-    #     使用 Leiden 算法检测社区，并创建社区节点。
-    #     """
-    #     self.detect_communities()
-    #     communities = self.get_communities()
-    #     for community, nodes in communities.items():
-    #         community_size = len(nodes)
-    #         level = self._determine_community_level(community_size)
-    #         report = " ".join(nodes)
-    #         self._create_community_node(community, level, report)
+    def read_community_schema(self):
+        try:
+            with open(self.community_path, "r", encoding="utf-8") as file:
+                community_schema = json.load(file)
+        except:
+            raise FileNotFoundError(
+                "Community schema not found. Please make sure to generate it first."
+            )
+        return community_schema
 
-    # def _determine_community_level(self, size):
-    #     """
-    #     根据社区大小确定社区等级。
-    #     """
-    #     if size < 10:
-    #         return 1
-    #     elif size < 50:
-    #         return 2
-    #     elif size < 100:
-    #         return 3
-    #     else:
-    #         return 4
+    def get_loaded_documents(self):
+        try:
+            with open(self.txt_path, "w", encoding="utf-8") as file:
+                lines = file.readlines()
+                return set(line.strip() for line in lines)
+        except:
+            raise FileNotFoundError("Cache file not found.")
 
-    # def _create_community_node(self, community, level, report):
-    #     """
-    #     创建社区节点。
-    #     """
-    #     with self.driver.session() as session:
-    #         session.write_transaction(self._create_and_return_community, community, level, report)
+    def add_loaded_documents(self, file_path):
+        if file_path in self.loaded_documents:
+            print(
+                f"Document '{file_path}' has already been loaded, skipping addition to cache."
+            )
+            return
+        with open(self.txt_path, "a", encoding="utf-8") as file:
+            file.write(file_path + "\n")
+        self.loaded_documents.add(file_path)
 
-    # @staticmethod
-    # def _create_and_return_community(tx, community, level, report):
-    #     query = (
-    #         "MERGE (c:Community {id: $community}) "
-    #         "SET c.level = $level, c.report = $report "
-    #         "RETURN c"
-    #     )
-    #     tx.run(query, community=community, level=level, report=report)
+    def gen_single_community_report(self, community: dict):
+        nodes = community["nodes"]
+        edges = community["edges"]
+        nodes_describe = [self.get_entity_by_name(i) for i in nodes]
+        edges_describe = [self.get_entity_by_name(i) for i in edges]
+        data = f"""
+        Text:
+        -----Entities-----
+        ```csv
+        {nodes_describe}
+        ```
+        -----Relationships-----
+        ```csv
+        {edges_describe}
+        ```"""
+        prompt = GEN_COMMUNITY_REPORT.format(input_text=data)
+        report = self.llm.predict(prompt)
+        return report
+
+    def generate_community_report(self):
+        communities_schema = self.read_community_schema()
+        # 从level较小的社区开始生成报告
+        communities_schema = dict(
+            sorted(
+                communities_schema.items(),
+                key=lambda item: item[1]["level"],
+                reverse=True,
+            )
+        )
+        community_keys, community_values = list(communities_schema.keys()), list(
+            communities_schema.values()
+        )
+        for i in tqdm(range(len(community_keys)), desc="generating community report"):
+            community = community_values[i]
+            community["report"] = self.gen_single_community_report(community)
+            break
+        # TODO save new community schema
