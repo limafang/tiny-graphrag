@@ -15,7 +15,6 @@ def save_triplets_to_txt(triplets, file_path):
     with open(file_path, "a", encoding="utf-8") as file:
         file.write(f"{triplets[0]},{triplets[1]},{triplets[2]}\n")
 
-
 # def cosine_similarity(self, vector1: List[float], vector2: List[float]) -> float:
 #         """
 #         calculate cosine similarity between two vectors

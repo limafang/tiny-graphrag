@@ -11,13 +11,13 @@ import json
 
 class TinyGraph:
 
-    def __init__(self, driver, llm, emb, working_dir="working_dir"):
+    def __init__(self, driver, llm, emb, working_dir="workspace"):
         self.driver = driver
         self.llm = llm
         self.embedding = emb
         self.working_dir = working_dir
         os.makedirs(self.working_dir, exist_ok=True)
-        self.txt_path = os.path.join(working_dir, "file.txt")
+        self.txt_path = os.path.join(working_dir, "doc.txt")
         self.chunk_path = os.path.join(working_dir, "chunk.json")
         self.community_path = os.path.join(working_dir, "community.json")
 
@@ -35,10 +35,12 @@ class TinyGraph:
             "MERGE (a)-[r:Relationship {name: $predicate}]->(b)"
             "RETURN a, b, r"
         )
-        result = tx.run(query, subject=subject, object=obj, predicate=predicate)
+        result = tx.run(query, subject=subject,
+                        object=obj, predicate=predicate)
         try:
             return [
-                {"a": record["a"]["name"], "b": record["b"]["name"], "r": predicate}
+                {"a": record["a"]["name"], "b": record["b"]
+                    ["name"], "r": predicate}
                 for record in result
             ]
         except Exception as e:
@@ -53,6 +55,7 @@ class TinyGraph:
 
     @staticmethod
     def split_text(file_path, segment_length=300, overlap_length=50):
+        # TODO : return chunks and chunk_ids
         if overlap_length >= segment_length:
             raise ValueError(
                 "Overlap length cannot be greater than or equal to segment length."
@@ -65,7 +68,8 @@ class TinyGraph:
         start_index = 0
 
         while start_index + segment_length <= len(content):
-            text_segments.append(content[start_index : start_index + segment_length])
+            text_segments.append(
+                content[start_index: start_index + segment_length])
             start_index += segment_length - overlap_length
 
         if start_index < len(content):
@@ -102,7 +106,9 @@ class TinyGraph:
             entities = self.get_entity(segment)
             triplets = self.get_triplets(segment, entities)
             for subject, predicate, obj in triplets:
+                # TODO: add chunk id
                 self.create_triplet(subject, predicate, obj)
+        self.add_loaded_documents(filepath)
         print(f"doc '{filepath}' has been loaded.")
 
     def detect_communities(self):
@@ -146,18 +152,17 @@ class TinyGraph:
         """
         with self.driver.session() as session:
             result = session.run(query, name=name)
-            entities = [record["n"] for record in result]
+            entities = [record["n"].get("name") for record in result]
         return entities[0]
 
-    def get_edges_by_id(self, name):
-        # TODO
+    def get_edges_by_names(self, name1, name2):
         query = """
-        MATCH (n:Entity {name: $name})-[r]-(m:Entity)
+        MATCH (n:Entity {name: $name1})-[r]-(m:Entity {name: $name2})
         RETURN r
         """
         with self.driver.session() as session:
-            result = session.run(query, name=name)
-            edges = [record["r"] for record in result]
+            result = session.run(query, {"name1": name1, "name2": name2})
+            edges = [record["r"].get("name") for record in result]
         return edges
 
     def gen_community_schema(self) -> dict[str, dict]:
@@ -217,7 +222,8 @@ class TinyGraph:
 
         return dict(results)
 
-    def gen_community_schema(self):
+    def gen_community(self):
+        self.detect_communities()
         community_schema = self.gen_community_schema()
         with open(self.community_path, "w", encoding="utf-8") as file:
             json.dump(community_schema, file, indent=4)
@@ -228,13 +234,12 @@ class TinyGraph:
                 community_schema = json.load(file)
         except:
             raise FileNotFoundError(
-                "Community schema not found. Please make sure to generate it first."
-            )
+                "Community schema not found. Please make sure to generate it first.")
         return community_schema
 
     def get_loaded_documents(self):
         try:
-            with open(self.txt_path, "w", encoding="utf-8") as file:
+            with open(self.txt_path, "r", encoding="utf-8") as file:
                 lines = file.readlines()
                 return set(line.strip() for line in lines)
         except:
@@ -251,19 +256,27 @@ class TinyGraph:
         self.loaded_documents.add(file_path)
 
     def gen_single_community_report(self, community: dict):
-        nodes = community["nodes"]
-        edges = community["edges"]
-        nodes_describe = [self.get_entity_by_name(i) for i in nodes]
-        edges_describe = [self.get_entity_by_name(i) for i in edges]
+        nodes = community['nodes']
+        edges = community['edges']
+        nodes_describe = [
+            {'name': i, 'desc': self.get_entity_by_name(i)} for i in nodes]
+        edges_describe = [{'source': i[0], 'target': i[1],
+                           'desc': self.get_edges_by_names(i[0], i[1])} for i in edges]
+        nodes_csv = "entity,description\n"
+        for node in nodes_describe:
+            nodes_csv += f"{node['name']},{node['desc']}\n"
+        edges_csv = "source,target,description\n"
+        for edge in edges_describe:
+            edges_csv += f"{edge['source']},{edge['target']},{edge['desc']}\n"
         data = f"""
         Text:
         -----Entities-----
         ```csv
-        {nodes_describe}
+        {nodes_csv}
         ```
         -----Relationships-----
         ```csv
-        {edges_describe}
+        {edges_csv}
         ```"""
         prompt = GEN_COMMUNITY_REPORT.format(input_text=data)
         report = self.llm.predict(prompt)
@@ -272,18 +285,24 @@ class TinyGraph:
     def generate_community_report(self):
         communities_schema = self.read_community_schema()
         # 从level较小的社区开始生成报告
-        communities_schema = dict(
-            sorted(
-                communities_schema.items(),
-                key=lambda item: item[1]["level"],
-                reverse=True,
-            )
-        )
-        community_keys, community_values = list(communities_schema.keys()), list(
-            communities_schema.values()
-        )
-        for i in tqdm(range(len(community_keys)), desc="generating community report"):
-            community = community_values[i]
-            community["report"] = self.gen_single_community_report(community)
-            break
-        # TODO save new community schema
+        communities_schema = sorted(communities_schema.items(
+        ), key=lambda item: item[1]['level'], reverse=True)
+        for community_key, community in tqdm(communities_schema, desc="generating community report"):
+            community['report'] = self.gen_single_community_report(community)
+        with open(self.community_path, "w", encoding="utf-8") as file:
+            json.dump(communities_schema, file, indent=4)
+        print("All community report has been generated.")
+
+    def local_query(self, query):
+        # TODO
+        with self.driver.session() as session:
+            result = session.run(query)
+            records = list(result)
+        return records
+
+    def global_query(self, query):
+        # TODO
+        with self.driver.session() as session:
+            result = session.run(query)
+            records = list(result)
+        return records
