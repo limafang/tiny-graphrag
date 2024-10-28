@@ -199,14 +199,15 @@ class TinyGraph:
         res = []
         for node in nodes:
             similarity = cosine_similarity(input_emb, node["n.embedding"])
-            res.append((node["n.name"], similarity))
+            res.append(node["n.name"])
         return sorted(res, key=lambda x: x[1], reverse=True)[:k]
 
-    def get_communities(self, nodes: List, input_emb):
+    def get_communities(self, nodes: List):
+        nodes = set(nodes)
         communities_schema = self.read_community_schema()
         res = []
-        for community_id, community_info in communities_schema:
-            if nodes & community_info["nodes"]:
+        for community_id, community_info in communities_schema.items():
+            if nodes & set(community_info["nodes"]):
                 res.append(
                     {"community_id": community_id, "community_info": community_info}
                 )
@@ -375,10 +376,10 @@ class TinyGraph:
 
     def build_local_query_context(self, query):
         topk_similar_entities_context = self.get_topk_similar_entities(query)
-        topk_similar_communities_context = self.get_topk_similar_communities(
+        topk_similar_communities_context = self.get_communities(
             topk_similar_entities_context, query
         )
-        topk_similar_entities_context = self.get_topk_similar_relations(
+        topk_similar_entities_context = self.get_relations(
             topk_similar_entities_context, query
         )
         topk_similar_chunks_context = self.get_topk_similar_chunks(

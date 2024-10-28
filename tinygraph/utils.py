@@ -1,4 +1,6 @@
 import re
+import numpy as np
+from typing import List, Tuple
 
 
 def get_text_inside_tag(html_string: str, tag: str):
@@ -16,7 +18,7 @@ def save_triplets_to_txt(triplets, file_path):
         file.write(f"{triplets[0]},{triplets[1]},{triplets[2]}\n")
 
 
-def cosine_similarity(self, vector1: List[float], vector2: List[float]) -> float:
+def cosine_similarity(vector1: List[float], vector2: List[float]) -> float:
     """
     calculate cosine similarity between two vectors
     """
