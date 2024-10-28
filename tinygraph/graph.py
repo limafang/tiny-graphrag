@@ -1,7 +1,9 @@
 from neo4j import GraphDatabase
 import os
 from tqdm import tqdm
-from .utils import get_text_inside_tag
+from .utils import get_text_inside_tag, cosine_similarity
+from .llm.base import BaseLLM
+from .embedding.base import BaseEmb
 from .prompt import GET_ENTITY, GET_TRIPLETS, GEN_COMMUNITY_REPORT
 from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
@@ -11,7 +13,9 @@ import json
 
 class TinyGraph:
 
-    def __init__(self, driver, llm, emb, working_dir="workspace"):
+    def __init__(
+        self, driver, llm: BaseLLM, emb: BaseLLM, working_dir: str = "workspace"
+    ):
         self.driver = driver
         self.llm = llm
         self.embedding = emb
@@ -168,15 +172,33 @@ class TinyGraph:
         # TODO
         pass
 
+    def add_embedding_for_graph(self):
+        query = """
+        MATCH (n)
+        RETURN n
+        """
+        with self.driver.session() as session:
+            result = session.run(query)
+            for record in result:
+                node = record["n"]
+                name = node["name"]
+                embedding = self.embedding.get_emb(name)
+                # 更新节点，添加新的 embedding 属性
+                update_query = """
+                MATCH (n {name: $name})
+                SET n.embedding = $embedding
+                """
+                session.run(update_query, name=name, embedding=embedding)
+
     def get_topk_similar_entities(self, input_emb, k=1) -> List[Tuple[str, float]]:
         query = """
         MATCH (n)
-        RETURN n.name, n.embedding`
+        RETURN n.name, n.embedding
         """
         nodes = self.query(query)
         res = []
         for node in nodes:
-            similarity = self.cosine_similarity(input_emb, node["n.embedding"])
+            similarity = cosine_similarity(input_emb, node["n.embedding"])
             res.append((node["n.name"], similarity))
         return sorted(res, key=lambda x: x[1], reverse=True)[:k]
 
