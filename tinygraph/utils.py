@@ -15,15 +15,17 @@ def save_triplets_to_txt(triplets, file_path):
     with open(file_path, "a", encoding="utf-8") as file:
         file.write(f"{triplets[0]},{triplets[1]},{triplets[2]}\n")
 
-# def cosine_similarity(self, vector1: List[float], vector2: List[float]) -> float:
-#         """
-#         calculate cosine similarity between two vectors
-#         """
-#         dot_product = np.dot(vector1, vector2)
-#         magnitude = np.linalg.norm(vector1) * np.linalg.norm(vector2)
-#         if not magnitude:
-#             return 0
-#         return dot_product / magnitude
+
+def cosine_similarity(self, vector1: List[float], vector2: List[float]) -> float:
+    """
+    calculate cosine similarity between two vectors
+    """
+    dot_product = np.dot(vector1, vector2)
+    magnitude = np.linalg.norm(vector1) * np.linalg.norm(vector2)
+    if not magnitude:
+        return 0
+    return dot_product / magnitude
+
 
 # def get_similar_nodes(self, input_emb: List[float]) -> List[Tuple[str, float]]:
 #     """
