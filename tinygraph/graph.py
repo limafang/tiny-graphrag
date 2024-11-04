@@ -160,7 +160,7 @@ class TinyGraph:
         query = """
         MATCH (n)-[r]-(m)
         WHERE n.name = $name
-        RETURN n,r,m
+        RETURN n.name AS n,r.name AS r,m.name AS m
         """
         with self.driver.session() as session:
             result = session.run(query, name=node)
@@ -198,8 +198,9 @@ class TinyGraph:
         nodes = self.query(query)
         res = []
         for node in nodes:
-            similarity = cosine_similarity(input_emb, node["n.embedding"])
-            res.append(node["n.name"])
+            if node["n.embedding"] is not None:
+                similarity = cosine_similarity(input_emb, node["n.embedding"])
+                res.append(node["n.name"])
         return sorted(res, key=lambda x: x[1], reverse=True)[:k]
 
     def get_communities(self, nodes: List):
@@ -214,10 +215,11 @@ class TinyGraph:
         return res
 
     def get_relations(self, nodes: List, input_emb):
-        edges = []
+        nodes = set(nodes)
+        res = []
         for i in nodes:
-            edges.append(self.get_node_edgs(i))
-        pass
+            res.append(self.get_node_edgs(i))
+        return res
 
     def get_chunks(self, nodes, input_emb):
         chunks = []
@@ -379,28 +381,28 @@ class TinyGraph:
         topk_similar_communities_context = self.get_communities(
             topk_similar_entities_context, query
         )
-        topk_similar_entities_context = self.get_relations(
+        topk_similar_relations_context = self.get_relations(
             topk_similar_entities_context, query
         )
-        topk_similar_chunks_context = self.get_topk_similar_chunks(
+        topk_similar_chunks_context = self.get_chunks(
             topk_similar_entities_context, query
         )
         return f"""
         -----Reports-----
         ```csv
-        {communities_context}
+        {topk_similar_communities_context}
         ```
         -----Entities-----
         ```csv
-        {entities_context}
+        {topk_similar_entities_context}
         ```
         -----Relationships-----
         ```csv
-        {relations_context}
+        {topk_similar_relations_context}
         ```
         -----Sources-----
         ```csv
-        {chunks_context}
+        {topk_similar_chunks_context}
         ```
         """
 
