@@ -1,10 +1,21 @@
 from neo4j import GraphDatabase
 import os
 from tqdm import tqdm
-from .utils import get_text_inside_tag, cosine_similarity
+from .utils import (
+    get_text_inside_tag,
+    cosine_similarity,
+    compute_mdhash_id,
+    read_json_file,
+    write_json_file,
+)
 from .llm.base import BaseLLM
 from .embedding.base import BaseEmb
-from .prompt import GET_ENTITY, GET_TRIPLETS, GEN_COMMUNITY_REPORT
+from .prompt import (
+    GET_ENTITY,
+    GET_TRIPLETS,
+    GEN_COMMUNITY_REPORT,
+    ENTITY_DISAMBIGUATION,
+)
 from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 from collections import defaultdict
@@ -21,11 +32,12 @@ class TinyGraph:
         self.embedding = emb
         self.working_dir = working_dir
         os.makedirs(self.working_dir, exist_ok=True)
-        self.txt_path = os.path.join(working_dir, "doc.txt")
+        self.doc_path = os.path.join(working_dir, "doc.txt")
         self.chunk_path = os.path.join(working_dir, "chunk.json")
         self.community_path = os.path.join(working_dir, "community.json")
+        self.loaded_documents = self.get_loaded_documents()
 
-    def create_triplet(self, subject, predicate, obj):
+    def create_triplet(self, subject: dict, predicate, obj: dict):
         with self.driver.session() as session:
             session.write_transaction(
                 self._create_and_return_triplet, subject, predicate, obj
@@ -34,12 +46,23 @@ class TinyGraph:
     @staticmethod
     def _create_and_return_triplet(tx, subject, predicate, obj):
         query = (
-            "MERGE (a:Entity {name: $subject}) "
-            "MERGE (b:Entity {name: $object}) "
+            "MERGE (a:Entity {name: $subject_name, description: $subject_desc, chunks_id: $subject_chunks_id, entity_id: $subject_entity_id}) "
+            "MERGE (b:Entity {name: $object_name, description: $object_desc, chunks_id: $object_chunks_id, entity_id: $object_entity_id}) "
             "MERGE (a)-[r:Relationship {name: $predicate}]->(b)"
             "RETURN a, b, r"
         )
-        result = tx.run(query, subject=subject, object=obj, predicate=predicate)
+        result = tx.run(
+            query,
+            subject_name=subject["name"],
+            subject_desc=subject["description"],
+            subject_chunks_id=subject["chunks id"],
+            subject_entity_id=subject["entity id"],
+            object_name=obj["name"],
+            object_desc=obj["description"],
+            object_chunks_id=obj["chunks id"],
+            object_entity_id=obj["entity id"],
+            predicate=predicate,
+        )
         try:
             return [
                 {"a": record["a"]["name"], "b": record["b"]["name"], "r": predicate}
@@ -57,12 +80,7 @@ class TinyGraph:
 
     @staticmethod
     def split_text(file_path, segment_length=300, overlap_length=50):
-        # TODO : return chunks and chunk_ids
-        if overlap_length >= segment_length:
-            raise ValueError(
-                "Overlap length cannot be greater than or equal to segment length."
-            )
-
+        chunks = {}
         with open(file_path, "r", encoding="utf-8") as file:
             content = file.read()
 
@@ -76,40 +94,184 @@ class TinyGraph:
         if start_index < len(content):
             text_segments.append(content[start_index:])
 
-        return text_segments
+        for i in text_segments:
+            chunks.update({compute_mdhash_id(i, prefix="chunk-"): i})
 
-    def get_entity(self, text: str):
+        return chunks
+
+    def get_entity(self, text: str, chunk_id: str):
         data = self.llm.predict(GET_ENTITY.format(text=text))
-        data = get_text_inside_tag(data, "concept")
-        return data
+        concepts = []
+        for concept_html in get_text_inside_tag(data, "concept"):
+            concept = {}
+            concept["name"] = get_text_inside_tag(concept_html, "name")[0].strip()
+            concept["description"] = get_text_inside_tag(concept_html, "description")[
+                0
+            ].strip()
+            concept["chunks id"] = [chunk_id]
+            concept["entity id"] = compute_mdhash_id(
+                concept["description"], prefix="entity-"
+            )
+            concepts.append(concept)
+        return concepts
 
-    def get_triplets(self, text: str, entity: list):
-        data = self.llm.predict(GET_TRIPLETS.format(text=text, entity=entity))
+    def get_triplets(self, content, entity: list) -> List[Dict]:
+        data = self.llm.predict(GET_TRIPLETS.format(text=content, entity=entity))
         data = get_text_inside_tag(data, "triplet")
         res = []
         for i in data:
             try:
                 subject = get_text_inside_tag(i, "subject")[0]
+                subject_id = get_text_inside_tag(i, "subject_id")[0]
                 predicate = get_text_inside_tag(i, "predicate")[0]
                 object = get_text_inside_tag(i, "object")[0]
-                res.append((subject, predicate, object))
+                object_id = get_text_inside_tag(i, "object_id")[0]
+                res.append(
+                    {
+                        "subject": subject,
+                        "subject_id": subject_id,
+                        "predicate": predicate,
+                        "object": object,
+                        "object_id": object_id,
+                    }
+                )
             except:
                 continue
         return res
 
-    def load_document(self, filepath):
+    def add_document(self, filepath, use_llm_deambiguation=False):
+        """
+        Adds a document to the system by performing the following steps:
+        1. Check if the document has already been loaded.
+        2. Split the document into chunks.
+        3. Extract entities and triplets from the chunks.
+        4. Perform entity disambiguation if required.
+        5. Merge entities and triplets.
+        6. Store the merged entities and triplets in a Neo4j database.
+
+        Args:
+            filepath (str): The path to the document to be added.
+            use_llm_deambiguation (bool): Whether to use LLM for entity disambiguation.
+        """
+
+        # ================ Check if the document has been loaded ================
         if filepath in self.get_loaded_documents():
-            print(f"Doc '{filepath}' has been loaded, skip import process.")
+            print(
+                f"Document '{filepath}' has already been loaded, skipping import process."
+            )
             return
-        text_segments = self.split_text(filepath)
-        print(f"Doc '{filepath}' has been loaded, processing.")
-        for segment in tqdm(text_segments, desc=f"processing '{filepath}'"):
-            entities = self.get_entity(segment)
-            triplets = self.get_triplets(segment, entities)
-            for subject, predicate, obj in triplets:
-                # TODO: add chunk id
-                self.create_triplet(subject, predicate, obj)
+
         self.add_loaded_documents(filepath)
+
+        # ================ Chunking ================
+        chunks = self.split_text(filepath)
+        existing_chunks = read_json_file(self.chunk_path)
+
+        # Filter out chunks that are already in storage
+        new_chunks = {k: v for k, v in chunks.items() if k not in existing_chunks}
+
+        if not new_chunks:
+            print("All chunks are already in the storage.")
+            return
+
+        # Merge new chunks with existing chunks
+        all_chunks = {**existing_chunks, **new_chunks}
+        write_json_file(all_chunks, self.chunk_path)
+        print(f"Document '{filepath}' has been chunked.")
+
+        # ================ Entity Extraction ================
+        all_entities = []
+        all_triplets = []
+
+        for chunk_id, chunk_content in tqdm(
+            all_chunks.items(), desc=f"Processing '{filepath}'"
+        ):
+            entities = self.get_entity(chunk_content, chunk_id=chunk_id)
+            all_entities.extend(entities)
+            triplets = self.get_triplets(chunk_content, entities)
+            all_triplets.extend(triplets)
+
+        print(
+            f"{len(all_entities)} entities and {len(all_triplets)} triplets have been extracted."
+        )
+
+        # ================ Entity Disambiguation ================
+        entity_names = list(set(entity["name"] for entity in all_entities))
+
+        if use_llm_deambiguation:
+            for name in entity_names:
+                same_name_entities = [
+                    entity for entity in all_entities if entity["name"] == name
+                ]
+                transform_text = self.llm.predict(
+                    ENTITY_DISAMBIGUATION.format(same_name_entities)
+                )
+                entity_id_mapping = get_text_inside_tag(transform_text, "transform")
+
+                for entity in all_entities:
+                    entity_id = entity["entity id"]
+                    if entity_id in entity_id_mapping:
+                        entity["entity id"] = entity_id_mapping[entity_id]
+
+                for triplet in all_triplets:
+                    subject_id = triplet["subject_id"]
+                    object_id = triplet["object_id"]
+                    if subject_id in entity_id_mapping:
+                        triplet["subject_id"] = entity_id_mapping[subject_id]
+                    if object_id in entity_id_mapping:
+                        triplet["object_id"] = entity_id_mapping[object_id]
+        else:
+            entity_name_mapping = {}
+            for entity in all_entities:
+                entity_name = entity["name"]
+                if entity_name not in entity_name_mapping:
+                    entity_name_mapping[entity_name] = entity["entity id"]
+
+            for entity in all_entities:
+                entity["entity id"] = entity_name_mapping[entity["name"]]
+
+            for triplet in all_triplets:
+                triplet["subject_id"] = entity_name_mapping[triplet["subject"]]
+                triplet["object_id"] = entity_name_mapping[triplet["object"]]
+
+        unique_entity_ids = list(set(entity["entity id"] for entity in all_entities))
+
+        # ================ Merge Entities ================
+        merged_entities = []
+
+        for entity_id in unique_entity_ids:
+            same_id_entities = [
+                entity for entity in all_entities if entity["entity id"] == entity_id
+            ]
+            description = " ".join(
+                [entity["description"] for entity in same_id_entities]
+            )
+            chunk_ids = [entity["chunks id"] for entity in same_id_entities]
+
+            merged_entities.append(
+                {
+                    "name": same_id_entities[0]["name"],
+                    "description": description,
+                    "chunks id": chunk_ids,
+                    "entity id": entity_id,
+                }
+            )
+
+        # ================ Store Data in Neo4j ================
+        for triplet in all_triplets:
+            subject_id = triplet["subject_id"]
+            object_id = triplet["object_id"]
+            subject = next(
+                entity
+                for entity in merged_entities
+                if entity["entity id"] == subject_id
+            )
+            object = next(
+                entity for entity in merged_entities if entity["entity id"] == object_id
+            )
+            self.create_triplet(subject, triplet["predicate"], object)
+        # ================ communities ================
+        # self.detect_communities()
         print(f"doc '{filepath}' has been loaded.")
 
     def detect_communities(self):
@@ -312,7 +474,7 @@ class TinyGraph:
 
     def get_loaded_documents(self):
         try:
-            with open(self.txt_path, "r", encoding="utf-8") as file:
+            with open(self.doc_path, "r", encoding="utf-8") as file:
                 lines = file.readlines()
                 return set(line.strip() for line in lines)
         except:
@@ -324,7 +486,7 @@ class TinyGraph:
                 f"Document '{file_path}' has already been loaded, skipping addition to cache."
             )
             return
-        with open(self.txt_path, "a", encoding="utf-8") as file:
+        with open(self.doc_path, "a", encoding="utf-8") as file:
             file.write(file_path + "\n")
         self.loaded_documents.add(file_path)
 

@@ -36,7 +36,7 @@ GET_ENTITY = """
 ## Goal
 
 You are an experienced machine learning teacher. 
-You need to find out the concepts related to machine learning that the article requires students to master.  
+You need to identify the key concepts related to machine learning that the article requires students to master. For each concept, provide a brief description that explains its relevance and importance in the context of the article.
 
 ## Example
 
@@ -44,15 +44,30 @@ article:
 "In the latest study, we explored the potential of using machine learning algorithms for disease prediction. We used support vector machines (SVM) and random forest algorithms to analyze medical data. The results showed that these models performed well in predicting disease risk through feature selection and cross-validation. In particular, the random forest model showed better performance in dealing with overfitting problems. In addition, we discussed the application of deep learning in medical image analysis."
 
 response:
-<concept>Support Vector Machine (SVM)</concept>
-<concept>Random Forest Algorithm</concept>
-<concept>Feature Selection</concept>
-<concept>Overfitting</concept>
-<concept>Deep Learning</concept>
+<concept>
+    <name>Support Vector Machine (SVM)</name>
+    <description>A supervised learning model used for classification and regression tasks, particularly effective in high-dimensional spaces.</description>
+</concept>
+<concept>
+    <name>Random Forest Algorithm</name>
+    <description>An ensemble learning method that builds multiple decision trees and merges them together to get a more accurate and stable prediction, often used to reduce overfitting.</description>
+</concept>
+<concept>
+    <name>Feature Selection</name>
+    <description>The process of selecting a subset of relevant features for use in model construction, crucial for improving model performance and reducing complexity.</description>
+</concept>
+<concept>
+    <name>Overfitting</name>
+    <description>A common issue where a model learns the details and noise in the training data to the extent that it negatively impacts the model's performance on new data.</description>
+</concept>
+<concept>
+    <name>Deep Learning</name>
+    <description>A subset of machine learning that uses neural networks with many layers to model complex patterns in large datasets, often applied in image and speech recognition tasks.</description>
+</concept>
 
-## Formate
+## Format
 
-Wrap these concepts in the HTML tag <concept> and return
+Wrap each concept in the HTML tag <concept>, and include the name of the concept in the <name> tag and its description in the <description> tag.
 
 ## Article
 
@@ -61,8 +76,51 @@ Wrap these concepts in the HTML tag <concept> and return
 ## Your response
 """
 
-GET_TRIPLETS = """
 
+ENTITY_DISAMBIGUATION = """
+## Goal
+Given multiple entities with the same name, determine if they can be merged into a single entity. If merging is possible, provide the transformation from entity id to entity id.
+
+## Guidelines
+1. **Entities:** A list of entities with the same name.
+2. **Merge:** Determine if the entities can be merged into a single entity.
+3. **Transformation:** If merging is possible, provide the transformation from entity id to entity id.
+
+## Example
+1. Entities:
+   [
+       {"name": "Entity A", "entity id": "entity-1"},
+       {"name": "Entity A", "entity id": "entity-2"},
+       {"name": "Entity A", "entity id": "entity-3"}
+   ]
+   
+Your response should be:
+
+<transformation>{"entity-2": "entity-1", "entity-3": "entity-1"}</transformation>
+
+
+2. Entities:
+   [
+       {"name": "Entity B", "entity id": "entity-4"},
+       {"name": "Entity C", "entity id": "entity-5"},
+       {"name": "Entity B", "entity id": "entity-6"}
+   ]
+
+Your response should be:
+
+<transformation>None</transformation>
+
+## Output Format
+Provide the following information:
+- Transformation: A dictionary mapping entity ids to the final entity id after merging.
+
+## Given Entities
+{entities}
+
+## Your response
+"""
+
+GET_TRIPLETS = """
 ## Goal
 Identify and extract all the relationships between the given concepts from the provided text.
 Identify as many relationships between the concepts as possible.
@@ -77,16 +135,16 @@ The relationship in the triple should accurately reflect the interaction or conn
 1. Article :
     "Gaussian Processes are used to model the objective function in Bayesian Optimization" 
    Given entities: 
-   ["Gaussian Processes", "Bayesian Optimization"].
+   [{{"name": "Gaussian Processes", "entity id": "entity-1"}}, {{"name": "Bayesian Optimization", "entity id": "entity-2"}}]
    Output:
-   <triplet><subject>Gaussian Processes</subject><predicate>are used to model the objective function in</predicate><object>Bayesian Optimization</object></triplet>
+   <triplet><subject>Gaussian Processes</subject><subject_id>entity-1</subject_id><predicate>are used to model the objective function in</predicate><object>Bayesian Optimization</object><object_id>entity-2</object_id></triplet>
 
 2. Article :
     "Hydrogen is a colorless, odorless, non-toxic gas and is the lightest and most abundant element in the universe. Oxygen is a gas that supports combustion and is widely present in the Earth's atmosphere. Water is a compound made up of hydrogen and oxygen, with the chemical formula H2O."
     Given entities: 
-    ["Hydrogen","Oxygen","Water"]
+    [{{"name": "Hydrogen", "entity id": "entity-3"}}, {{"name": "Oxygen", "entity id": "entity-4"}}, {{"name": "Water", "entity id": "entity-5"}}]
     Output:
-    <triplet><subject>Hydrogen</subject><predicate>is a component of</predicate><object>Water</object></triplet>
+    <triplet><subject>Hydrogen</subject><subject_id>entity-3</subject_id><predicate>is a component of</predicate><object>Water</object><object_id>entity-5</object_id></triplet>
 3. Article :
     "John read a book on the weekend" 
     Given entities: 
@@ -97,7 +155,7 @@ The relationship in the triple should accurately reflect the interaction or conn
 ## Format:
 For each identified triplet, provide:
 **the entity should just from "Given Entities"**
-<triplet><subject>[Entity]</subject><predicate>[The action or relationship]</predicate><object>[Entity]</object></triplet>
+<triplet><subject>[Entity]</subject><subject_id>[Entity ID]</subject_id><predicate>[The action or relationship]</predicate><object>[Entity]</object><object_id>[Entity ID]</object_id></triplet>
 
 ## Given Entities:
 {entity}
