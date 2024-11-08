@@ -21,6 +21,25 @@ import numpy as np
 from collections import defaultdict
 import json
 
+from dataclasses import dataclass
+
+
+@dataclass
+class Entity:
+    name: str
+    description: str
+    chunks_id: List[str]
+    entity_id: str
+
+
+@dataclass
+class Triplet:
+    subject: str
+    subject_id: str
+    predicate: str
+    object: str
+    object_id: str
+
 
 class TinyGraph:
 
@@ -186,10 +205,15 @@ class TinyGraph:
         for chunk_id, chunk_content in tqdm(
             all_chunks.items(), desc=f"Processing '{filepath}'"
         ):
-            entities = self.get_entity(chunk_content, chunk_id=chunk_id)
-            all_entities.extend(entities)
-            triplets = self.get_triplets(chunk_content, entities)
-            all_triplets.extend(triplets)
+            try:
+                entities = self.get_entity(chunk_content, chunk_id=chunk_id)
+                all_entities.extend(entities)
+                triplets = self.get_triplets(chunk_content, entities)
+                all_triplets.extend(triplets)
+            except:
+                print(
+                    f"An error occurred while processing chunk '{chunk_id}'. SKIPPING..."
+                )
 
         print(
             f"{len(all_entities)} entities and {len(all_triplets)} triplets have been extracted."
