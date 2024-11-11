@@ -180,8 +180,6 @@ class TinyGraph:
             )
             return
 
-        self.add_loaded_documents(filepath)
-
         # ================ Chunking ================
         chunks = self.split_text(filepath)
         existing_chunks = read_json_file(self.chunk_path)
@@ -218,11 +216,11 @@ class TinyGraph:
         print(
             f"{len(all_entities)} entities and {len(all_triplets)} triplets have been extracted."
         )
-
         # ================ Entity Disambiguation ================
         entity_names = list(set(entity["name"] for entity in all_entities))
 
         if use_llm_deambiguation:
+            entity_id_mapping = {}
             for name in entity_names:
                 same_name_entities = [
                     entity for entity in all_entities if entity["name"] == name
@@ -230,33 +228,45 @@ class TinyGraph:
                 transform_text = self.llm.predict(
                     ENTITY_DISAMBIGUATION.format(same_name_entities)
                 )
-                entity_id_mapping = get_text_inside_tag(transform_text, "transform")
-
-                for entity in all_entities:
-                    entity_id = entity["entity id"]
-                    if entity_id in entity_id_mapping:
-                        entity["entity id"] = entity_id_mapping[entity_id]
-
-                for triplet in all_triplets:
-                    subject_id = triplet["subject_id"]
-                    object_id = triplet["object_id"]
-                    if subject_id in entity_id_mapping:
-                        triplet["subject_id"] = entity_id_mapping[subject_id]
-                    if object_id in entity_id_mapping:
-                        triplet["object_id"] = entity_id_mapping[object_id]
+                entity_id_mapping.update(
+                    get_text_inside_tag(transform_text, "transform")
+                )
         else:
-            entity_name_mapping = {}
+            entity_id_mapping = {}
             for entity in all_entities:
                 entity_name = entity["name"]
-                if entity_name not in entity_name_mapping:
-                    entity_name_mapping[entity_name] = entity["entity id"]
+                if entity_name not in entity_id_mapping:
+                    entity_id_mapping[entity_name] = entity["entity id"]
 
-            for entity in all_entities:
-                entity["entity id"] = entity_name_mapping[entity["name"]]
+        # 根据 mapping 对所有实体进行消岐
+        for entity in all_entities:
+            entity["entity id"] = entity_id_mapping.get(
+                entity["name"], entity["entity id"]
+            )
 
-            for triplet in all_triplets:
-                triplet["subject_id"] = entity_name_mapping[triplet["subject"]]
-                triplet["object_id"] = entity_name_mapping[triplet["object"]]
+        # 根据 mapping 对所有三元组进行消岐
+        triplets_to_remove = [
+            triplet
+            for triplet in all_triplets
+            if entity_id_mapping.get(triplet["subject"], triplet["subject_id"]) is None
+            or entity_id_mapping.get(triplet["object"], triplet["object_id"]) is None
+        ]
+
+        updated_triplets = [
+            {
+                **triplet,
+                "subject_id": entity_id_mapping.get(
+                    triplet["subject"], triplet["subject_id"]
+                ),
+                "object_id": entity_id_mapping.get(
+                    triplet["object"], triplet["object_id"]
+                ),
+            }
+            for triplet in all_triplets
+            if triplet not in triplets_to_remove
+        ]
+
+        all_triplets = updated_triplets
 
         unique_entity_ids = list(set(entity["entity id"] for entity in all_entities))
 
@@ -296,6 +306,7 @@ class TinyGraph:
             self.create_triplet(subject, triplet["predicate"], object)
         # ================ communities ================
         # self.detect_communities()
+        self.add_loaded_documents(filepath)
         print(f"doc '{filepath}' has been loaded.")
 
     def detect_communities(self):
