@@ -56,40 +56,36 @@ class TinyGraph:
         self.community_path = os.path.join(working_dir, "community.json")
         self.loaded_documents = self.get_loaded_documents()
 
-    def create_triplet(self, subject: dict, predicate, obj: dict):
-        with self.driver.session() as session:
-            session.write_transaction(
-                self._create_and_return_triplet, subject, predicate, obj
-            )
-
-    @staticmethod
-    def _create_and_return_triplet(tx, subject, predicate, obj):
+    def create_triplet(self, subject: dict, predicate, object: dict):
         query = (
             "MERGE (a:Entity {name: $subject_name, description: $subject_desc, chunks_id: $subject_chunks_id, entity_id: $subject_entity_id}) "
             "MERGE (b:Entity {name: $object_name, description: $object_desc, chunks_id: $object_chunks_id, entity_id: $object_entity_id}) "
             "MERGE (a)-[r:Relationship {name: $predicate}]->(b)"
             "RETURN a, b, r"
         )
-        result = tx.run(
-            query,
-            subject_name=subject["name"],
-            subject_desc=subject["description"],
-            subject_chunks_id=subject["chunks id"],
-            subject_entity_id=subject["entity id"],
-            object_name=obj["name"],
-            object_desc=obj["description"],
-            object_chunks_id=obj["chunks id"],
-            object_entity_id=obj["entity id"],
-            predicate=predicate,
-        )
-        try:
-            return [
-                {"a": record["a"]["name"], "b": record["b"]["name"], "r": predicate}
-                for record in result
-            ]
-        except Exception as e:
-            print("An error occurred:", e)
-            return None
+        with self.driver.session() as session:
+            result = session.run(
+                query,
+                subject_name=subject["name"],
+                subject_desc=subject["description"],
+                subject_chunks_id=subject["chunks id"],
+                subject_entity_id=subject["entity id"],
+                object_name=object["name"],
+                object_desc=object["description"],
+                object_chunks_id=object["chunks id"],
+                object_entity_id=object["entity id"],
+                predicate=predicate,
+            )
+            print(subject["name"])
+            print(subject["description"])
+            print(subject["chunks id"])
+            print(subject["entity id"])
+            print(object["name"])
+            print(object["description"])
+            print(object["chunks id"])
+            print(object["entity id"])
+            records = list(result)
+            print(records)
 
     def query(self, query):
         with self.driver.session() as session:
@@ -265,47 +261,40 @@ class TinyGraph:
             for triplet in all_triplets
             if triplet not in triplets_to_remove
         ]
-
         all_triplets = updated_triplets
 
         unique_entity_ids = list(set(entity["entity id"] for entity in all_entities))
 
         # ================ Merge Entities ================
-        merged_entities = []
+        entity_map = {}
 
-        for entity_id in unique_entity_ids:
-            same_id_entities = [
-                entity for entity in all_entities if entity["entity id"] == entity_id
-            ]
-            description = " ".join(
-                [entity["description"] for entity in same_id_entities]
-            )
-            chunk_ids = [entity["chunks id"] for entity in same_id_entities]
-
-            merged_entities.append(
-                {
-                    "name": same_id_entities[0]["name"],
-                    "description": description,
-                    "chunks id": chunk_ids,
+        for entity in all_entities:
+            entity_id = entity["entity id"]
+            if entity_id not in entity_map:
+                entity_map[entity_id] = {
+                    "name": entity["name"],
+                    "description": entity["description"],
+                    "chunks id": [],
                     "entity id": entity_id,
                 }
-            )
+            else:
+                entity_map[entity_id]["description"] += " " + entity["description"]
 
+            entity_map[entity_id]["chunks id"].extend(entity["chunks id"])
         # ================ Store Data in Neo4j ================
         for triplet in all_triplets:
             subject_id = triplet["subject_id"]
             object_id = triplet["object_id"]
-            subject = next(
-                entity
-                for entity in merged_entities
-                if entity["entity id"] == subject_id
-            )
-            object = next(
-                entity for entity in merged_entities if entity["entity id"] == object_id
-            )
-            self.create_triplet(subject, triplet["predicate"], object)
+
+            subject = entity_map.get(subject_id)
+            object = entity_map.get(object_id)
+            if subject and object:
+                self.create_triplet(subject, triplet["predicate"], object)
+
         # ================ communities ================
-        # self.detect_communities()
+        self.gen_community()
+        # ================ embedding ================
+        self.add_embedding_for_graph()
         self.add_loaded_documents(filepath)
         print(f"doc '{filepath}' has been loaded.")
 
@@ -354,20 +343,21 @@ class TinyGraph:
         return entities[0]
 
     def get_node_edgs(self, node):
+        print(node)
         query = """
         MATCH (n)-[r]-(m)
         WHERE n.name = $name
         RETURN n.name AS n,r.name AS r,m.name AS m
         """
         with self.driver.session() as session:
-            result = session.run(query, name=node)
+            result = session.run(query, name=node[0])
             edges = [(record["n"], record["r"], record["m"]) for record in result]
-        # TODO need format
         return edges
 
     def get_node_chunks(self, node):
-        # TODO
-        pass
+        existing_chunks = read_json_file(self.chunk_path)
+        chunks = [existing_chunks[i] for i in node[2]]
+        return chunks
 
     def add_embedding_for_graph(self):
         query = """
@@ -378,41 +368,49 @@ class TinyGraph:
             result = session.run(query)
             for record in result:
                 node = record["n"]
-                name = node["name"]
-                embedding = self.embedding.get_emb(name)
+                description = node["description"]
+                id = node["entity_id"]
+                embedding = self.embedding.get_emb(description)
                 # 更新节点，添加新的 embedding 属性
                 update_query = """
-                MATCH (n {name: $name})
+                MATCH (n {entity_id: $id})
                 SET n.embedding = $embedding
                 """
-                session.run(update_query, name=name, embedding=embedding)
+                session.run(update_query, id=id, embedding=embedding)
 
     def get_topk_similar_entities(self, input_emb, k=1) -> List[Tuple[str, float]]:
         query = """
         MATCH (n)
-        RETURN n.name, n.embedding
+        RETURN n.name, n.description, n.chunks_id, n.entity_id, n.embedding
         """
         nodes = self.query(query)
         res = []
         for node in nodes:
             if node["n.embedding"] is not None:
                 similarity = cosine_similarity(input_emb, node["n.embedding"])
-                res.append(node["n.name"])
-        return sorted(res, key=lambda x: x[1], reverse=True)[:k]
+                res.append(
+                    (
+                        node["n.name"],
+                        node["n.description"],
+                        node["n.chunks_id"],
+                        node["n.entity_id"],
+                        similarity,
+                    )
+                )
+        return sorted(res, key=lambda x: x[-1], reverse=True)[:k]
 
     def get_communities(self, nodes: List):
-        nodes = set(nodes)
         communities_schema = self.read_community_schema()
         res = []
+        nodes = [i[0] for i in nodes]
         for community_id, community_info in communities_schema.items():
-            if nodes & set(community_info["nodes"]):
+            if set(nodes) & set(community_info["nodes"]):
                 res.append(
                     {"community_id": community_id, "community_info": community_info}
                 )
         return res
 
     def get_relations(self, nodes: List, input_emb):
-        nodes = set(nodes)
         res = []
         for i in nodes:
             res.append(self.get_node_edgs(i))
@@ -421,8 +419,8 @@ class TinyGraph:
     def get_chunks(self, nodes, input_emb):
         chunks = []
         for i in nodes:
-            chunks.append(self.get_node_edgs(i))
-        pass
+            chunks.append(self.get_node_chunks(i))
+        return chunks
 
     def get_edges_by_names(self, name1, name2):
         query = """
@@ -574,9 +572,10 @@ class TinyGraph:
         print("All community report has been generated.")
 
     def build_local_query_context(self, query):
-        topk_similar_entities_context = self.get_topk_similar_entities(query)
+        query_emb = self.embedding.get_emb(query)
+        topk_similar_entities_context = self.get_topk_similar_entities(query_emb)
         topk_similar_communities_context = self.get_communities(
-            topk_similar_entities_context, query
+            topk_similar_entities_context
         )
         topk_similar_relations_context = self.get_relations(
             topk_similar_entities_context, query
