@@ -305,3 +305,79 @@ Do not include information where the supporting evidence for it is not provided.
 
 Output:
 """
+
+GLOBAL_MAP_POINTS = """
+You are a helpful assistant responding to questions about data in the tables provided.
+
+
+---Goal---
+
+Generate a response consisting of a list of key points that responds to the user's question, summarizing all relevant information in the input data tables.
+
+You should use the data provided in the data tables below as the primary context for generating the response.
+If you don't know the answer or if the input data tables do not contain sufficient information to provide an answer, just say so. Do not make anything up.
+
+Each key point in the response should have the following element:
+- Description: A comprehensive description of the point.
+- Importance Score: An integer score between 0-100 that indicates how important the point is in answering the user's question. An 'I don't know' type of response should have a score of 0.
+
+The response should be HTML formatted as follows:
+
+
+<point><description>"Description of point 1..."</description><score>score_value</score></point>
+<point><description>"Description of point 2..."</description><score>score_value</score></point>
+
+
+The response shall preserve the original meaning and use of modal verbs such as "shall", "may" or "will".
+Do not include information where the supporting evidence for it is not provided.
+
+
+---Data tables---
+
+{context_data}
+
+---User query---
+
+{query}
+
+---Goal---
+
+Generate a response consisting of a list of key points that responds to the user's question, summarizing all relevant information in the input data tables.
+
+You should use the data provided in the data tables below as the primary context for generating the response.
+If you don't know the answer or if the input data tables do not contain sufficient information to provide an answer, just say so. Do not make anything up.
+
+Each key point in the response should have the following element:
+- Description: A comprehensive description of the point.
+- Importance Score: An integer score between 0-100 that indicates how important the point is in answering the user's question. An 'I don't know' type of response should have a score of 0.
+
+The response shall preserve the original meaning and use of modal verbs such as "shall", "may" or "will".
+Do not include information where the supporting evidence for it is not provided.
+
+The response should be HTML formatted as follows:
+
+<point><description>"Description of point 1..."</description><score>score_value</score></point>
+<point><description>"Description of point 2..."</description><score>score_value</score></point>
+
+
+"""
+
+LOCAL_QUERY = """
+## User Query
+{query}
+## Context
+{context}
+## Task
+Based on given context, please provide a response to the user query.
+## Your Response
+"""
+
+GLOBAL_QUERY = """
+## User Query
+{query}
+## Context
+{context}
+## Task
+Based on given context, please provide a response to the user query.
+## Your Response
+"""

@@ -10,12 +10,7 @@ from .utils import (
 )
 from .llm.base import BaseLLM
 from .embedding.base import BaseEmb
-from .prompt import (
-    GET_ENTITY,
-    GET_TRIPLETS,
-    GEN_COMMUNITY_REPORT,
-    ENTITY_DISAMBIGUATION,
-)
+from .prompt import *
 from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 from collections import defaultdict
@@ -424,7 +419,6 @@ class TinyGraph:
                 edges=set(),
                 nodes=set(),
                 chunk_ids=set(),
-                occurrence=0.0,
                 sub_communities=[],
             )
         )
@@ -605,24 +599,41 @@ class TinyGraph:
         ```
         """
 
-    def build_global_query_context(self):
-        # TODO
-        pass
+    def map_community_points(self, community_info, query):
+        points_html = self.llm.predict(
+            GLOBAL_MAP_POINTS.format(context_data=community_info, query=query)
+        )
+        points = get_text_inside_tag(points_html, "point")
+        res = []
+        for point in points:
+            try:
+                score = get_text_inside_tag(point, "score")[0]
+                desc = get_text_inside_tag(point, "description")[0]
+                res.append((desc, score))
+            except:
+                continue
+        return res
+
+    def build_global_query_context(self, query, level=1):
+        communities_schema = self.read_community_schema()
+        candidate_community = {}
+        points = []
+        for communityid, community_info in communities_schema.items():
+            if community_info["level"] < level:
+                candidate_community.update({communityid: community_info})
+        for communityid, community_info in candidate_community.items():
+            points.extend(self.map_community_points(community_info["report"], query))
+        points = sorted(points, key=lambda x: x[-1], reverse=True)
+        return points
 
     def local_query(self, query):
         context = self.build_local_query_context(query)
-        prompt = f"""
-        {context}
-        """
-        response = self.llm.predict(context)
-        with self.driver.session() as session:
-            result = session.run(query)
-            records = list(result)
-        return records
+        prompt = LOCAL_QUERY.format(query=query, context=context)
+        response = self.llm.predict(prompt)
+        return response
 
-    def global_query(self, query):
-        context = self.build_global_query_context()
-        with self.driver.session() as session:
-            result = session.run(query)
-            records = list(result)
-        return records
+    def global_query(self, query, level=1):
+        context = self.build_global_query_context(query, level)
+        prompt = GLOBAL_QUERY.format(query=query, context=context)
+        response = self.llm.predict(prompt)
+        return response
