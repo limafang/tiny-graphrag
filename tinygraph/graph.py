@@ -25,20 +25,12 @@ from dataclasses import dataclass
 
 
 @dataclass
-class Entity:
+class Node:
     name: str
-    description: str
-    chunks_id: List[str]
+    desc: str
+    chunks_id: list
     entity_id: str
-
-
-@dataclass
-class Triplet:
-    subject: str
-    subject_id: str
-    predicate: str
-    object: str
-    object_id: str
+    similarity: any
 
 
 class TinyGraph:
@@ -76,16 +68,6 @@ class TinyGraph:
                 object_entity_id=object["entity id"],
                 predicate=predicate,
             )
-            print(subject["name"])
-            print(subject["description"])
-            print(subject["chunks id"])
-            print(subject["entity id"])
-            print(object["name"])
-            print(object["description"])
-            print(object["chunks id"])
-            print(object["entity id"])
-            records = list(result)
-            print(records)
 
     def query(self, query):
         with self.driver.session() as session:
@@ -342,21 +324,20 @@ class TinyGraph:
             entities = [record["n"].get("name") for record in result]
         return entities[0]
 
-    def get_node_edgs(self, node):
-        print(node)
+    def get_node_edgs(self, node: Node):
         query = """
         MATCH (n)-[r]-(m)
-        WHERE n.name = $name
+        WHERE n.entity_id = $id
         RETURN n.name AS n,r.name AS r,m.name AS m
         """
         with self.driver.session() as session:
-            result = session.run(query, name=node[0])
+            result = session.run(query, id=node.entity_id)
             edges = [(record["n"], record["r"], record["m"]) for record in result]
         return edges
 
     def get_node_chunks(self, node):
         existing_chunks = read_json_file(self.chunk_path)
-        chunks = [existing_chunks[i] for i in node[2]]
+        chunks = [existing_chunks[i] for i in node.chunks_id]
         return chunks
 
     def add_embedding_for_graph(self):
@@ -378,35 +359,38 @@ class TinyGraph:
                 """
                 session.run(update_query, id=id, embedding=embedding)
 
-    def get_topk_similar_entities(self, input_emb, k=1) -> List[Tuple[str, float]]:
+    def get_topk_similar_entities(self, input_emb, k=1) -> List[Node]:
         query = """
         MATCH (n)
-        RETURN n.name, n.description, n.chunks_id, n.entity_id, n.embedding
+        RETURN n
         """
         nodes = self.query(query)
         res = []
         for node in nodes:
-            if node["n.embedding"] is not None:
-                similarity = cosine_similarity(input_emb, node["n.embedding"])
-                res.append(
-                    (
-                        node["n.name"],
-                        node["n.description"],
-                        node["n.chunks_id"],
-                        node["n.entity_id"],
-                        similarity,
-                    )
+            node = node["n"]
+            if node["embedding"] is not None:
+                similarity = cosine_similarity(input_emb, node["embedding"])
+                node = Node(
+                    name=node["name"],
+                    desc=node["description"],
+                    chunks_id=node["chunks_id"],
+                    entity_id=node["entity_id"],
+                    similarity=similarity,
                 )
-        return sorted(res, key=lambda x: x[-1], reverse=True)[:k]
+                res.append(node)
+        return sorted(res, key=lambda x: x.similarity, reverse=True)[:k]
 
-    def get_communities(self, nodes: List):
+    def get_communities(self, nodes: List[Node]):
         communities_schema = self.read_community_schema()
         res = []
-        nodes = [i[0] for i in nodes]
+        nodes_ids = [i.entity_id for i in nodes]
         for community_id, community_info in communities_schema.items():
-            if set(nodes) & set(community_info["nodes"]):
+            if set(nodes_ids) & set(community_info["nodes"]):
                 res.append(
-                    {"community_id": community_id, "community_info": community_info}
+                    {
+                        "community_id": community_id,
+                        "community_info": community_info["report"],
+                    }
                 )
         return res
 
@@ -450,8 +434,8 @@ class TinyGraph:
             result = session.run(
                 f"""
                 MATCH (n:Entity)
-                WITH n, n.communityIds AS communityIds, [(n)-[]-(m:Entity) | m.name] AS connected_nodes
-                RETURN n.name AS node_id, 
+                WITH n, n.communityIds AS communityIds, [(n)-[]-(m:Entity) | m.entity_id] AS connected_nodes
+                RETURN n.entity_id AS node_id, 
                        communityIds AS cluster_key,
                        connected_nodes
                 """
@@ -523,20 +507,39 @@ class TinyGraph:
             file.write(file_path + "\n")
         self.loaded_documents.add(file_path)
 
+    def get_node_by_id(self, node_id):
+        query = """
+        MATCH (n:Entity {entity_id: $node_id})
+        RETURN n
+        """
+        with self.driver.session() as session:
+            result = session.run(query, node_id=node_id)
+            nodes = [record["n"] for record in result]
+        return nodes[0]
+
+    def get_edges_by_id(self, src, tar):
+        query = """
+        MATCH (n:Entity {entity_id: $src})-[r]-(m:Entity {entity_id: $tar})
+        RETURN {src: n.name, r: r.name, tar: m.name} AS R
+        """
+        with self.driver.session() as session:
+            result = session.run(query, {"src": src, "tar": tar})
+            edges = [record["R"] for record in result]
+        return edges[0]
+
     def gen_single_community_report(self, community: dict):
         nodes = community["nodes"]
         edges = community["edges"]
-        nodes_describe = [
-            {"name": i, "desc": self.get_entity_by_name(i)} for i in nodes
-        ]
-        edges_describe = [
-            {
-                "source": i[0],
-                "target": i[1],
-                "desc": self.get_edges_by_names(i[0], i[1]),
-            }
-            for i in edges
-        ]
+        nodes_describe = []
+        edges_describe = []
+        for i in nodes:
+            node = self.get_node_by_id(i)
+            nodes_describe.append({"name": node["name"], "desc": node["description"]})
+        for i in edges:
+            edge = self.get_edges_by_id(i[0], i[1])
+            edges_describe.append(
+                {"source": edge["src"], "target": edge["tar"], "desc": edge["r"]}
+            )
         nodes_csv = "entity,description\n"
         for node in nodes_describe:
             nodes_csv += f"{node['name']},{node['desc']}\n"
@@ -559,12 +562,12 @@ class TinyGraph:
 
     def generate_community_report(self):
         communities_schema = self.read_community_schema()
-        # 从level较小的社区开始生成报告
-        communities_schema = sorted(
-            communities_schema.items(), key=lambda item: item[1]["level"], reverse=True
-        )
+        # 从level较大的社区开始生成报告
+        # communities_schema = sorted(
+        #     communities_schema.items(), key=lambda item: item[1]["level"], reverse=False
+        # )
         for community_key, community in tqdm(
-            communities_schema, desc="generating community report"
+            communities_schema.items(), desc="generating community report"
         ):
             community["report"] = self.gen_single_community_report(community)
         with open(self.community_path, "w", encoding="utf-8") as file:
