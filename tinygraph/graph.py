@@ -7,6 +7,7 @@ from .utils import (
     compute_mdhash_id,
     read_json_file,
     write_json_file,
+    _create_file_if_not_exists,
 )
 from .llm.base import BaseLLM
 from .embedding.base import BaseEmb
@@ -25,31 +26,79 @@ class Node:
     desc: str
     chunks_id: list
     entity_id: str
-    similarity: any
+    similarity: float
 
 
 class TinyGraph:
+    """
+    一个用于处理图数据库和语言模型的类。
+
+    该类通过连接到Neo4j图数据库，并使用语言模型（LLM）和嵌入模型（Embedding）来处理文档和图数据。
+    它还管理一个工作目录，用于存储文档、文档块和社区数据。
+    """
 
     def __init__(
-        self, driver, llm: BaseLLM, emb: BaseLLM, working_dir: str = "workspace"
+        self,
+        url: str,  # Neo4j数据库的URL
+        username: str,  # Neo4j数据库的用户名
+        password: str,  # Neo4j数据库的密码
+        llm: BaseLLM,  # 语言模型（LLM）实例
+        emb: BaseLLM,  # 嵌入模型（Embedding）实例
+        working_dir: str = "workspace",  # 工作目录，默认为"workspace"
     ):
-        self.driver = driver
-        self.llm = llm
-        self.embedding = emb
-        self.working_dir = working_dir
-        os.makedirs(self.working_dir, exist_ok=True)
+        """
+        初始化TinyGraph类。
+
+        参数:
+        - url: Neo4j数据库的URL
+        - username: Neo4j数据库的用户名
+        - password: Neo4j数据库的密码
+        - llm: 语言模型（LLM）实例
+        - emb: 嵌入模型（Embedding）实例
+        - working_dir: 工作目录，默认为"workspace"
+        """
+        self.driver = driver = GraphDatabase.driver(
+            url, auth=(username, password)
+        )  # 创建Neo4j数据库驱动
+        self.llm = llm  # 设置语言模型
+        self.embedding = emb  # 设置嵌入模型
+        self.working_dir = working_dir  # 设置工作目录
+        os.makedirs(self.working_dir, exist_ok=True)  # 创建工作目录（如果不存在）
+
+        # 定义文档、文档块和社区数据的文件路径
         self.doc_path = os.path.join(working_dir, "doc.txt")
         self.chunk_path = os.path.join(working_dir, "chunk.json")
         self.community_path = os.path.join(working_dir, "community.json")
+
+        # 创建文件（如果不存在）
+        self._create_file_if_not_exists(self.doc_path)
+        self._create_file_if_not_exists(self.chunk_path)
+        self._create_file_if_not_exists(self.community_path)
+
+        # 加载已加载的文档
         self.loaded_documents = self.get_loaded_documents()
 
-    def create_triplet(self, subject: dict, predicate, object: dict):
+    def create_triplet(self, subject: dict, predicate, object: dict) -> None:
+        """
+        创建一个三元组（Triplet）并将其存储到Neo4j数据库中。
+
+        参数:
+        - subject: 主题实体的字典，包含名称、描述、块ID和实体ID
+        - predicate: 关系名称
+        - object: 对象实体的字典，包含名称、描述、块ID和实体ID
+
+        返回:
+        - 查询结果
+        """
+        # 定义Cypher查询语句，用于创建或合并实体节点和关系
         query = (
             "MERGE (a:Entity {name: $subject_name, description: $subject_desc, chunks_id: $subject_chunks_id, entity_id: $subject_entity_id}) "
             "MERGE (b:Entity {name: $object_name, description: $object_desc, chunks_id: $object_chunks_id, entity_id: $object_entity_id}) "
-            "MERGE (a)-[r:Relationship {name: $predicate}]->(b)"
+            "MERGE (a)-[r:Relationship {name: $predicate}]->(b) "
             "RETURN a, b, r"
         )
+
+        # 使用数据库会话执行查询
         with self.driver.session() as session:
             result = session.run(
                 query,
@@ -64,36 +113,59 @@ class TinyGraph:
                 predicate=predicate,
             )
 
-    def query(self, query):
-        with self.driver.session() as session:
-            result = session.run(query)
-            records = list(result)
-        return records
+        return
 
-    @staticmethod
-    def split_text(file_path, segment_length=300, overlap_length=50):
-        chunks = {}
+    def split_text(file_path, segment_length=300, overlap_length=50) -> Dict:
+        """
+        将文本文件分割成多个片段，每个片段的长度为segment_length，相邻片段之间有overlap_length的重叠。
+
+        参数:
+        - file_path: 文本文件的路径
+        - segment_length: 每个片段的长度，默认为300
+        - overlap_length: 相邻片段之间的重叠长度，默认为50
+
+        返回:
+        - 包含片段ID和片段内容的字典
+        """
+        chunks = {}  # 用于存储片段的字典
+
         with open(file_path, "r", encoding="utf-8") as file:
-            content = file.read()
+            content = file.read()  # 读取文件内容
 
-        text_segments = []
-        start_index = 0
+        text_segments = []  # 用于存储分割后的文本片段
+        start_index = 0  # 初始化起始索引
 
+        # 循环分割文本，直到剩余文本长度不足以形成新的片段
         while start_index + segment_length <= len(content):
             text_segments.append(content[start_index : start_index + segment_length])
-            start_index += segment_length - overlap_length
+            start_index += segment_length - overlap_length  # 更新起始索引，考虑重叠长度
 
+        # 处理剩余的文本，如果剩余文本长度小于segment_length但大于0
         if start_index < len(content):
             text_segments.append(content[start_index:])
 
-        for i in text_segments:
-            chunks.update({compute_mdhash_id(i, prefix="chunk-"): i})
+        # 为每个片段生成唯一的ID，并将其存储在字典中
+        for segement in text_segments:
+            chunks.update({compute_mdhash_id(segement, prefix="chunk-"): segement})
 
         return chunks
 
-    def get_entity(self, text: str, chunk_id: str):
+    def get_entity(self, text: str, chunk_id: str) -> List[Dict]:
+        """
+        从给定的文本中提取实体，并为每个实体生成唯一的ID和描述。
+
+        参数:
+        - text: 输入的文本
+        - chunk_id: 文本块的ID
+
+        返回:
+        - 包含提取的实体信息的列表
+        """
+        # 使用语言模型预测实体信息
         data = self.llm.predict(GET_ENTITY.format(text=text))
-        concepts = []
+        concepts = []  # 用于存储提取的实体信息
+
+        # 从预测结果中提取实体信息
         for concept_html in get_text_inside_tag(data, "concept"):
             concept = {}
             concept["name"] = get_text_inside_tag(concept_html, "name")[0].strip()
@@ -105,19 +177,38 @@ class TinyGraph:
                 concept["description"], prefix="entity-"
             )
             concepts.append(concept)
+
         return concepts
 
     def get_triplets(self, content, entity: list) -> List[Dict]:
-        data = self.llm.predict(GET_TRIPLETS.format(text=content, entity=entity))
-        data = get_text_inside_tag(data, "triplet")
-        res = []
-        for i in data:
+        """
+        从给定的内容中提取三元组（Triplet）信息，并返回包含这些三元组信息的列表。
+
+        参数:
+        - content: 输入的内容
+        - entity: 实体列表
+
+        返回:
+        - 包含提取的三元组信息的列表
+        """
+        try:
+            # 使用语言模型预测三元组信息
+            data = self.llm.predict(GET_TRIPLETS.format(text=content, entity=entity))
+            data = get_text_inside_tag(data, "triplet")
+        except Exception as e:
+            print(f"Error predicting triplets: {e}")
+            return []
+
+        res = []  # 用于存储提取的三元组信息
+
+        # 从预测结果中提取三元组信息
+        for triplet_data in data:
             try:
-                subject = get_text_inside_tag(i, "subject")[0]
-                subject_id = get_text_inside_tag(i, "subject_id")[0]
-                predicate = get_text_inside_tag(i, "predicate")[0]
-                object = get_text_inside_tag(i, "object")[0]
-                object_id = get_text_inside_tag(i, "object_id")[0]
+                subject = get_text_inside_tag(triplet_data, "subject")[0]
+                subject_id = get_text_inside_tag(triplet_data, "subject_id")[0]
+                predicate = get_text_inside_tag(triplet_data, "predicate")[0]
+                object = get_text_inside_tag(triplet_data, "object")[0]
+                object_id = get_text_inside_tag(triplet_data, "object_id")[0]
                 res.append(
                     {
                         "subject": subject,
@@ -127,25 +218,26 @@ class TinyGraph:
                         "object_id": object_id,
                     }
                 )
-            except:
+            except Exception as e:
+                print(f"Error extracting triplet: {e}")
                 continue
+
         return res
 
-    def add_document(self, filepath, use_llm_deambiguation=False):
+    def add_document(self, filepath, use_llm_deambiguation=False) -> None:
         """
-        Adds a document to the system by performing the following steps:
-        1. Check if the document has already been loaded.
-        2. Split the document into chunks.
-        3. Extract entities and triplets from the chunks.
-        4. Perform entity disambiguation if required.
-        5. Merge entities and triplets.
-        6. Store the merged entities and triplets in a Neo4j database.
+        将文档添加到系统中，执行以下步骤：
+        1. 检查文档是否已经加载。
+        2. 将文档分割成块。
+        3. 从块中提取实体和三元组。
+        4. 执行实体消岐，有两种方法可选，默认将同名实体认为即为同一实体。
+        5. 合并实体和三元组。
+        6. 将合并的实体和三元组存储到Neo4j数据库中。
 
-        Args:
-            filepath (str): The path to the document to be added.
-            use_llm_deambiguation (bool): Whether to use LLM for entity disambiguation.
+        参数:
+        - filepath: 要添加的文档的路径
+        - use_llm_deambiguation: 是否使用LLM进行实体消岐
         """
-
         # ================ Check if the document has been loaded ================
         if filepath in self.get_loaded_documents():
             print(
@@ -211,13 +303,11 @@ class TinyGraph:
                 if entity_name not in entity_id_mapping:
                     entity_id_mapping[entity_name] = entity["entity id"]
 
-        # 根据 mapping 对所有实体进行消岐
         for entity in all_entities:
             entity["entity id"] = entity_id_mapping.get(
                 entity["name"], entity["entity id"]
             )
 
-        # 根据 mapping 对所有三元组进行消岐
         triplets_to_remove = [
             triplet
             for triplet in all_triplets
@@ -275,7 +365,7 @@ class TinyGraph:
         self.add_loaded_documents(filepath)
         print(f"doc '{filepath}' has been loaded.")
 
-    def detect_communities(self):
+    def detect_communities(self) -> None:
         query = """
         CALL gds.graph.project(
             'graph_help',
@@ -355,14 +445,15 @@ class TinyGraph:
                 session.run(update_query, id=id, embedding=embedding)
 
     def get_topk_similar_entities(self, input_emb, k=1) -> List[Node]:
+        res = []
         query = """
         MATCH (n)
         RETURN n
         """
-        nodes = self.query(query)
-        res = []
-        for node in nodes:
-            node = node["n"]
+        with self.driver.session() as session:
+            result = session.run(query)
+        for record in result:
+            node = record["n"]
             if node["embedding"] is not None:
                 similarity = cosine_similarity(input_emb, node["embedding"])
                 node = Node(
@@ -400,16 +491,6 @@ class TinyGraph:
         for i in nodes:
             chunks.append(self.get_node_chunks(i))
         return chunks
-
-    def get_edges_by_names(self, name1, name2):
-        query = """
-        MATCH (n:Entity {name: $name1})-[r]-(m:Entity {name: $name2})
-        RETURN r
-        """
-        with self.driver.session() as session:
-            result = session.run(query, {"name1": name1, "name2": name2})
-            edges = [record["r"].get("name") for record in result]
-        return edges
 
     def gen_community_schema(self) -> dict[str, dict]:
         results = defaultdict(
@@ -556,10 +637,6 @@ class TinyGraph:
 
     def generate_community_report(self):
         communities_schema = self.read_community_schema()
-        # 从level较大的社区开始生成报告
-        # communities_schema = sorted(
-        #     communities_schema.items(), key=lambda item: item[1]["level"], reverse=False
-        # )
         for community_key, community in tqdm(
             communities_schema.items(), desc="generating community report"
         ):

@@ -3,6 +3,7 @@ import numpy as np
 from typing import List, Tuple
 from hashlib import md5
 import json
+import os
 
 
 def get_text_inside_tag(html_string: str, tag: str):
@@ -48,17 +49,7 @@ def cosine_similarity(vector1: List[float], vector2: List[float]) -> float:
     return dot_product / magnitude
 
 
-# def get_similar_nodes(self, input_emb: List[float]) -> List[Tuple[str, float]]:
-#     """
-#     根据输入的嵌入向量，返回与图数据库中节点的相似度排序列表。
-#     """
-#     query = """
-#     MATCH (n)
-#     RETURN n.name, n.embedding
-#     """
-#     nodes = self.query(query)
-#     res = []
-#     for node in nodes:
-#         similarity = self.cosine_similarity(input_emb, node["n.embedding"])
-#         res.append((node["n.name"], similarity))
-#     return sorted(res, key=lambda x: x[1], reverse=True)
+def _create_file_if_not_exists(self, file_path: str):
+    if not os.path.exists(file_path):
+        with open(file_path, "w") as f:
+            f.write("")
