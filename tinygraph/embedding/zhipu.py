@@ -4,7 +4,7 @@ from .base import BaseEmb
 
 
 class zhipuEmb(BaseEmb):
-    def __init__(self, api_key: str, model_name: str, **kwargs):
+    def __init__(self, model_name: str, api_key: str, **kwargs):
         super().__init__(model_name=model_name, **kwargs)
         self.client = ZhipuAI(api_key=api_key)
 

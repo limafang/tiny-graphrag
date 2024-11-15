@@ -357,9 +357,9 @@ class TinyGraph:
             object = entity_map.get(object_id)
             if subject and object:
                 self.create_triplet(subject, triplet["predicate"], object)
-
         # ================ communities ================
         self.gen_community()
+        self.generate_community_report()
         # ================ embedding ================
         self.add_embedding_for_graph()
         self.add_loaded_documents(filepath)
