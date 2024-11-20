@@ -49,7 +49,7 @@ def cosine_similarity(vector1: List[float], vector2: List[float]) -> float:
     return dot_product / magnitude
 
 
-def _create_file_if_not_exists(self, file_path: str):
+def create_file_if_not_exists(file_path: str):
     if not os.path.exists(file_path):
         with open(file_path, "w") as f:
             f.write("")

@@ -7,7 +7,7 @@ from .utils import (
     compute_mdhash_id,
     read_json_file,
     write_json_file,
-    _create_file_if_not_exists,
+    create_file_if_not_exists,
 )
 from .llm.base import BaseLLM
 from .embedding.base import BaseEmb
@@ -71,9 +71,9 @@ class TinyGraph:
         self.community_path = os.path.join(working_dir, "community.json")
 
         # 创建文件（如果不存在）
-        self._create_file_if_not_exists(self.doc_path)
-        self._create_file_if_not_exists(self.chunk_path)
-        self._create_file_if_not_exists(self.community_path)
+        create_file_if_not_exists(self.doc_path)
+        create_file_if_not_exists(self.chunk_path)
+        create_file_if_not_exists(self.community_path)
 
         # 加载已加载的文档
         self.loaded_documents = self.get_loaded_documents()
@@ -115,7 +115,7 @@ class TinyGraph:
 
         return
 
-    def split_text(file_path, segment_length=300, overlap_length=50) -> Dict:
+    def split_text(self,file_path:str, segment_length=300, overlap_length=50) -> Dict:
         """
         将文本文件分割成多个片段，每个片段的长度为segment_length，相邻片段之间有overlap_length的重叠。
 
@@ -128,7 +128,6 @@ class TinyGraph:
         - 包含片段ID和片段内容的字典
         """
         chunks = {}  # 用于存储片段的字典
-
         with open(file_path, "r", encoding="utf-8") as file:
             content = file.read()  # 读取文件内容
 
@@ -266,7 +265,7 @@ class TinyGraph:
         all_triplets = []
 
         for chunk_id, chunk_content in tqdm(
-            all_chunks.items(), desc=f"Processing '{filepath}'"
+            new_chunks.items(), desc=f"Processing '{filepath}'"
         ):
             try:
                 entities = self.get_entity(chunk_content, chunk_id=chunk_id)
@@ -329,8 +328,6 @@ class TinyGraph:
             if triplet not in triplets_to_remove
         ]
         all_triplets = updated_triplets
-
-        unique_entity_ids = list(set(entity["entity id"] for entity in all_entities))
 
         # ================ Merge Entities ================
         entity_map = {}
