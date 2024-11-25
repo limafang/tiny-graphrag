@@ -59,3 +59,13 @@ print(global_res)
 ```
 
 通过以上步骤，你可以快速上手 Tiny-Graphrag，体验其强大的文档管理和查询功能。
+
+## 致谢
+
+编写 Tiny-Graphrag 的过程中，我们参考了以下项目：
+
+[GraphRAG](https://github.com/microsoft/graphrag)
+
+[nano-graphrag](https://github.com/gusye1234/nano-graphrag)
+
+需要说明的是，Tiny-Graphrag 是一个简化版本的 GraphRAG 实现，并不适用于生产环境，如果你需要一个更完整的 GraphRAG 实现，我们建议你使用上述项目。
