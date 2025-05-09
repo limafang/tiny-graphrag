@@ -561,6 +561,6 @@
   - 局部查询和全局查询成功运行的示例：
 
 <div align="center">
-  <img src="https://github.com/Lukas-Calvin/Tiny-Graphrag_docs/blob/main/images/查询结果示例.png" width="1000">
+  <img src="https://github.com/Lukas-Calvin/tiny-graphrag/blob/main/images/%E6%9F%A5%E8%AF%A2%E7%BB%93%E6%9E%9C%E7%A4%BA%E4%BE%8B.png" width="1000">
 </div>
 
