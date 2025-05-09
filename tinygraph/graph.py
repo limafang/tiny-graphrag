@@ -449,6 +449,8 @@ class TinyGraph:
         """
         with self.driver.session() as session:
             result = session.run(query)
+            # 若遇到 ResultConsumedError: The result has been consumed. Fetch all needed records before calling Result.consume().的报错，可尝试将result = session.run(query)置换为result = list(session.run(query))
+        for record in result:
         for record in result:
             node = record["n"]
             if node["embedding"] is not None:
