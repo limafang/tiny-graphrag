@@ -60,6 +60,9 @@ print(global_res)
 
 通过以上步骤，你可以快速上手 Tiny-Graphrag，体验其强大的文档管理和查询功能。
 
+## 代码解读
+本仓库提供了Tiny-Graphrag项目核心代码的解读文档，用于帮助新手快速理解整个项目，详情见：Tiny-Graphrag 使用指南与代码解读
+
 ## 致谢
 
 编写 Tiny-Graphrag 的过程中，我们参考了以下项目：
